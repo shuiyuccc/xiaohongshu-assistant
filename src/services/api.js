@@ -11,11 +11,13 @@ async function request(endpoint, options = {}) {
     }
   })
 
+  const data = await response.json().catch(() => null)
+
   if (!response.ok) {
-    throw new Error(`API 请求失败: ${response.statusText}`)
+    throw new Error(data?.error || `API 请求失败: ${response.statusText}`)
   }
 
-  return response.json()
+  return data
 }
 
 // 获取或创建用户

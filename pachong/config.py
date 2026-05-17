@@ -29,7 +29,7 @@ DOWNLOAD_IMAGES = True
 # 4. 复制Cookie字符串粘贴到下面
 #
 # 如果填写了MANUAL_COOKIE，将直接使用它登录，无需手动登录
-MANUAL_COOKIE =""
+MANUAL_COOKIE ="abRequestId=47841d2a-6a5e-5704-be43-12a03a9c4e59; ets=1778654011373; a1=19e200a60fcyeyps0cgomhbzwo12kawtlhne6aein50000232651; webId=3d89fb294217e0f478f96de15fd87469; gid=yjdJ880Wyi1DyjdJ880K8x0diSvdvUM8Skl6I3IxDuElyd28JT0E9K888JqJK2y8yWjJfWK0; xsecappid=xhs-pc-web; webBuild=6.11.1; acw_tc=0ad59ccb17790290871195411ef086fdf8fb18a15836624d839ba3343dac03; websectiga=10f9a40ba454a07755a08f27ef8194c53637eba4551cf9751c009d9afb564467; sec_poison_id=db852fc0-5e56-4d25-a861-c131dec04e23; loadts=1779029107257; web_session=0400698cb5138a56662b179c3c384b7e7997cf; id_token=VjEAAKj+Q4nqjCwunue8Ca51X+oDnw+MEOO5LOYpkuqG83FlDaVuBK854arGjahledzZ8aZHP4wS2VQX8vu8+V8xQQtH/9UaLAfK6HUddU02eoHeF4ORbl4P7zCFM3IEGdr+WsDC; x-rednote-datactry=CN; x-rednote-holderctry=CN; unread={%22ub%22:%226a082608000000003501fce2%22%2C%22ue%22:%226a0889d20000000036019a54%22%2C%22uc%22:21}"
 
 # ==================== 性能优化配置 ====================
 

@@ -4,14 +4,20 @@ import initSqlJs from 'sql.js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
+import { spawn } from 'child_process'
 import { chromium } from 'playwright-core'
 
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ROOT_DIR = path.resolve(__dirname, '..')
 const app = express()
 const PORT = process.env.PORT || 3001
 const DB_PATH = path.join(__dirname, 'data.db')
+const PACHONG_DIR = path.join(ROOT_DIR, 'pachong')
+const PACHONG_BRIDGE = path.join(PACHONG_DIR, 'scrape_bridge.py')
+const XHS_OUTPUT_DIR = path.join(PACHONG_DIR, 'xiaohongshu_notes')
+const PYTHON_BIN = process.env.PYTHON_BIN || process.env.PYTHON || 'python'
 
 app.use(cors())
 app.use(express.json())
@@ -125,6 +131,7 @@ app.get('/api/users/:name/data', (req, res) => {
         type: row[2],
         source: row[3],
         theme: row[4],
+        originalCover: row[5],
         originalTitle: row[6],
         originalContent: row[7],
         publishDate: row[8],
@@ -242,6 +249,107 @@ function saveCookies(cookies) {
   fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2))
 }
 
+function normalizeCount(value, fallback = 10) {
+  const count = Number.parseInt(value, 10)
+  if (!Number.isFinite(count) || count <= 0) return fallback
+  return Math.min(count, 50)
+}
+
+function getErrorMessage(stdout, stderr) {
+  try {
+    const parsed = JSON.parse(stdout)
+    if (parsed?.error) return parsed.error
+  } catch {}
+
+  const lines = stderr
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  return lines.at(-1) || '爬虫执行失败'
+}
+
+function runPythonXhsScraper({ url, count, sourceName = '' }) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(PACHONG_BRIDGE)) {
+      reject(new Error(`未找到 Python 爬虫桥接脚本: ${PACHONG_BRIDGE}`))
+      return
+    }
+
+    fs.mkdirSync(XHS_OUTPUT_DIR, { recursive: true })
+
+    const args = [
+      '-X',
+      'utf8',
+      PACHONG_BRIDGE,
+      '--url',
+      url,
+      '--count',
+      String(normalizeCount(count)),
+      '--source-name',
+      sourceName,
+      '--output-dir',
+      XHS_OUTPUT_DIR,
+      '--login-wait',
+      '180'
+    ]
+
+    const child = spawn(PYTHON_BIN, args, {
+      cwd: PACHONG_DIR,
+      env: {
+        ...process.env,
+        PYTHONUTF8: '1',
+        PYTHONIOENCODING: 'utf-8'
+      }
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      reject(new Error('爬虫执行超时，请减少爬取数量后重试'))
+    }, 15 * 60 * 1000)
+
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8')
+    })
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8')
+    })
+
+    child.on('error', err => {
+      clearTimeout(timeout)
+      reject(new Error(`无法启动 Python 爬虫: ${err.message}`))
+    })
+
+    child.on('close', code => {
+      clearTimeout(timeout)
+
+      if (code !== 0) {
+        reject(new Error(getErrorMessage(stdout, stderr)))
+        return
+      }
+
+      try {
+        const parsed = JSON.parse(stdout)
+        if (parsed.error) {
+          reject(new Error(parsed.error))
+          return
+        }
+
+        resolve({
+          posts: Array.isArray(parsed.posts) ? parsed.posts : [],
+          outputDir: parsed.outputDir || '',
+          sourceName: parsed.sourceName || sourceName
+        })
+      } catch (err) {
+        reject(new Error(`爬虫结果解析失败: ${err.message}`))
+      }
+    })
+  })
+}
+
 // 检查登录态
 app.get('/api/xhs/session', (req, res) => {
   const cookies = loadCookies()
@@ -266,7 +374,7 @@ app.post('/api/xhs/qr-login/start', async (req, res) => {
       qrPage = null
     }
 
-    qrBrowser = await chromium.launch({ headless: true, executablePath: CHROME_PATH })
+    qrBrowser = await chromium.launch({ headless: false, executablePath: CHROME_PATH })
     const context = await qrBrowser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 800 }
@@ -336,161 +444,37 @@ app.get('/api/xhs/qr-login/status', async (req, res) => {
   }
 })
 
-// 爬取博主帖子
+// 爬取博主帖子：使用 pachong 目录里的 Python 爬虫逻辑
 app.post('/api/xhs/scrape', async (req, res) => {
   const { url, count = 10 } = req.body
 
   if (!url) return res.status(400).json({ error: '缺少 url 参数' })
 
-  const cookies = loadCookies()
-  if (!cookies) return res.status(401).json({ error: '未登录，请先扫码登录' })
-
-  let browser = null
   try {
-    browser = await chromium.launch({ headless: true, executablePath: CHROME_PATH })
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 800 }
-    })
-    await context.addCookies(cookies)
-
-    const page = await context.newPage()
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(3000)
-
-    // 提取帖子列表（博主主页的帖子卡片）
-    const postLinks = await page.evaluate((maxCount) => {
-      const links = []
-      // 小红书博主主页帖子链接选择器
-      const selectors = [
-        'a[href*="/explore/"]',
-        'a[href*="/search_result/"]',
-        '.note-item a',
-        '[class*="note"] a',
-        'section a'
-      ]
-      for (const sel of selectors) {
-        const els = document.querySelectorAll(sel)
-        for (const el of els) {
-          const href = el.getAttribute('href')
-          if (href && href.includes('/explore/') && !links.includes(href)) {
-            links.push(href)
-          }
-          if (links.length >= maxCount) break
-        }
-        if (links.length >= maxCount) break
-      }
-      return links.slice(0, maxCount)
-    }, count)
-
-    const posts = []
-
-    for (const link of postLinks) {
-      try {
-        const postUrl = link.startsWith('http') ? link : `https://www.xiaohongshu.com${link}`
-        const postPage = await context.newPage()
-        await postPage.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
-        await postPage.waitForTimeout(2000)
-
-        const postData = await postPage.evaluate(() => {
-          // 标题
-          const titleEl = document.querySelector('#detail-title, .title, [class*="title"]')
-          const title = titleEl ? titleEl.innerText.trim() : ''
-
-          // 正文
-          const contentEl = document.querySelector('#detail-desc, .desc, [class*="desc"], [class*="content"]')
-          const content = contentEl ? contentEl.innerText.trim() : ''
-
-          return { title, content }
-        })
-
-        if (postData.title || postData.content) {
-          posts.push(postData)
-        }
-
-        await postPage.close()
-      } catch {
-        // 单篇失败不影响整体
-      }
-    }
-
-    await browser.close()
-    res.json({ posts })
+    const result = await runPythonXhsScraper({ url, count, sourceName: url })
+    res.json(result)
   } catch (err) {
-    if (browser) await browser.close().catch(() => {})
     res.status(500).json({ error: err.message })
   }
 })
 
 // ─────────────────────────────────────────────────────────────
 
-// 按关键词搜索爆款帖子
+// 按关键词搜索爆款帖子：同样交给 Python 爬虫处理搜索结果页
 app.post('/api/xhs/search', async (req, res) => {
   const { keyword, count = 5 } = req.body
   if (!keyword) return res.status(400).json({ error: '缺少 keyword 参数' })
 
-  const cookies = loadCookies()
-  if (!cookies) return res.status(401).json({ error: '未登录，请先扫码登录' })
+  const searchUrl = `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&type=51`
 
-  let browser = null
   try {
-    browser = await chromium.launch({ headless: true, executablePath: CHROME_PATH })
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 800 }
-    })
-    await context.addCookies(cookies)
-
-    const page = await context.newPage()
-    const searchUrl = `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&type=51`
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(3000)
-
-    // 提取搜索结果帖子链接
-    const postLinks = await page.evaluate((maxCount) => {
-      const links = []
-      const els = document.querySelectorAll('a[href*="/explore/"]')
-      for (const el of els) {
-        const href = el.getAttribute('href')
-        if (href && !links.includes(href)) links.push(href)
-        if (links.length >= maxCount) break
-      }
-      return links.slice(0, maxCount)
-    }, count)
-
-    const posts = []
-    for (const link of postLinks) {
-      try {
-        const postUrl = link.startsWith('http') ? link : `https://www.xiaohongshu.com${link}`
-        const postPage = await context.newPage()
-        await postPage.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
-        await postPage.waitForTimeout(2000)
-
-        const postData = await postPage.evaluate(() => {
-          const titleEl = document.querySelector('#detail-title, .title, [class*="title"]')
-          const contentEl = document.querySelector('#detail-desc, .desc, [class*="desc"], [class*="content"]')
-          return {
-            title: titleEl ? titleEl.innerText.trim() : '',
-            content: contentEl ? contentEl.innerText.trim() : ''
-          }
-        })
-
-        if (postData.title || postData.content) posts.push(postData)
-        await postPage.close()
-      } catch {
-        // 单篇失败不影响整体
-      }
-    }
-
-    await browser.close()
-    res.json({ posts })
+    const result = await runPythonXhsScraper({ url: searchUrl, count, sourceName: keyword })
+    res.json(result)
   } catch (err) {
-    if (browser) await browser.close().catch(() => {})
     res.status(500).json({ error: err.message })
   }
 })
 
-// ─────────────────────────────────────────────────────────────
 
 // 启动服务器
 async function start() {

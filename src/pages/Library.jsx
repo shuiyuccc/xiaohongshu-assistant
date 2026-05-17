@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { addToLibrary as addToLibraryAPI, removeFromLibrary as removeFromLibraryAPI, getXhsSession, startQrLogin, getQrLoginStatus, scrapeInfluencer as scrapeInfluencerAPI, searchViral } from '../services/api'
-import { analyzeInfluencer, analyzeViral } from '../services/ai'
+import { analyzeViral } from '../services/ai'
 
 function QrModal({ onSuccess, onClose }) {
   const [qrImage, setQrImage] = useState('')
@@ -87,8 +87,15 @@ function PostCard({ post, index }) {
 
       {expanded && (
         <div className="px-4 pb-4 space-y-3 text-sm border-t border-gray-100">
+          {(post.likes || post.collects || post.comments) && (
+            <div className="pt-3 flex flex-wrap gap-2 text-xs text-gray-500">
+              {post.likes && <span className="px-2 py-1 bg-gray-50 rounded-full">点赞 {post.likes}</span>}
+              {post.collects && <span className="px-2 py-1 bg-gray-50 rounded-full">收藏 {post.collects}</span>}
+              {post.comments && <span className="px-2 py-1 bg-gray-50 rounded-full">评论 {post.comments}</span>}
+            </div>
+          )}
           {post.originalContent && (
-            <div className="pt-3">
+            <div className={post.likes || post.collects || post.comments ? '' : 'pt-3'}>
               <p className="text-xs font-semibold text-gray-400 uppercase mb-1">原文案</p>
               <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{post.originalContent}</p>
             </div>
@@ -147,7 +154,7 @@ export default function Library({ userId, username, library, onDataChange }) {
   const [nickname, setNickname] = useState('')
   const [showQr, setShowQr] = useState(false)
   const [results, setResults] = useState([])
-  const pendingAnalyzeRef = useRef(false)
+  const pendingAnalyzeRef = useRef(null)
 
   useEffect(() => {
     getXhsSession().then(data => setLoggedIn(data.loggedIn)).catch(() => {})
@@ -157,19 +164,37 @@ export default function Library({ userId, username, library, onDataChange }) {
     setLoggedIn(true)
     setNickname(nick)
     setShowQr(false)
-    if (pendingAnalyzeRef.current) {
-      pendingAnalyzeRef.current = false
+    if (pendingAnalyzeRef.current === 'influencer') {
+      pendingAnalyzeRef.current = null
       doScrapeAndAnalyze()
+    } else if (pendingAnalyzeRef.current === 'viral') {
+      pendingAnalyzeRef.current = null
+      doAnalyzeViral({ skipLoginCheck: true })
     }
   }
 
   const parseResult = (raw, fallbackPosts) => {
+    const enrichWithRawPost = (post, index) => {
+      const rawPost = fallbackPosts[index] || {}
+      return {
+        ...post,
+        originalTitle: post.originalTitle || rawPost.title || '',
+        originalContent: post.originalContent || rawPost.content || '',
+        originalCover: post.originalCover || rawPost.cover || '',
+        originalUrl: post.originalUrl || rawPost.url || '',
+        likes: post.likes ?? rawPost.likes ?? 0,
+        collects: post.collects ?? rawPost.collects ?? 0,
+        comments: post.comments ?? rawPost.comments ?? 0
+      }
+    }
+
     try {
       const jsonMatch = raw.match(/```json\n([\s\S]*?)\n```|(\{[\s\S]*\})/)
       const parsed = jsonMatch ? JSON.parse(jsonMatch[1] || jsonMatch[2]) : JSON.parse(raw)
-      return Array.isArray(parsed.posts) ? parsed.posts : [parsed]
+      const posts = Array.isArray(parsed.posts) ? parsed.posts : [parsed]
+      return posts.map(enrichWithRawPost)
     } catch {
-      return fallbackPosts.map(p => ({ originalTitle: p.title, originalContent: p.content }))
+      return fallbackPosts.map((p, index) => enrichWithRawPost({}, index))
     }
   }
 
@@ -182,25 +207,35 @@ export default function Library({ userId, username, library, onDataChange }) {
     setStatus('正在爬取博主主页...')
 
     try {
-      const { posts: rawPosts } = await scrapeInfluencerAPI(url, count)
+      const { posts: rawPosts, sourceName } = await scrapeInfluencerAPI(url, count)
       if (!rawPosts || rawPosts.length === 0) throw new Error('未能爬取到帖子，请检查链接是否正确')
 
-      setStatus(`爬取到 ${rawPosts.length} 篇帖子，正在 AI 分析风格...`)
-      const aiResult = await analyzeInfluencer(rawPosts)
-      const posts = parseResult(aiResult, rawPosts)
+      const bloggerName = sourceName || url
+      const posts = rawPosts.map(post => ({
+        ...post,
+        sourceName: bloggerName,
+        originalTitle: post.title || '',
+        originalContent: post.content || '',
+        originalCover: post.cover || '',
+        likes: post.likes || 0,
+        collects: post.collects || 0,
+        comments: post.comments || 0
+      }))
 
-      // 展示在页面
       setResults(posts)
-      setStatus(`分析完成，共 ${posts.length} 篇，正在存入素材库...`)
+      setStatus(`爬取完成，共 ${posts.length} 篇，正在存入素材库...`)
 
-      // 存入数据库
       for (const post of posts) {
         try {
           await addToLibraryAPI(userId, {
             type: 'influencer',
-            source: url,
+            source: bloggerName,
+            originalCover: post.originalCover || '',
             originalTitle: post.originalTitle || '',
             originalContent: post.originalContent || '',
+            likes: post.likes || 0,
+            collects: post.collects || 0,
+            comments: post.comments || 0,
             coverAnalysis: post.coverAnalysis || '',
             titleAnalysis: post.titleAnalysis || '',
             contentAnalysis: post.contentAnalysis || '',
@@ -212,7 +247,7 @@ export default function Library({ userId, username, library, onDataChange }) {
         }
       }
 
-      setStatus(`分析完成，${posts.length} 条已存入素材库`)
+      setStatus(`爬取完成，${posts.length} 条标题已列出并存入素材库`)
       onDataChange && onDataChange()
     } catch (err) {
       setError(err.message)
@@ -225,15 +260,14 @@ export default function Library({ userId, username, library, onDataChange }) {
   const handleAnalyzeInfluencer = () => {
     if (!url.trim()) { setError('请输入博主链接'); return }
     setError('')
-    if (!loggedIn) { pendingAnalyzeRef.current = true; setShowQr(true); return }
     doScrapeAndAnalyze()
   }
 
-  const handleAnalyzeViral = async () => {
+  const doAnalyzeViral = async ({ skipLoginCheck = false } = {}) => {
     if (!keyword.trim()) { setError('请输入分析需求'); return }
     setError('')
 
-    if (!loggedIn) { pendingAnalyzeRef.current = true; setShowQr(true); return }
+    if (!skipLoginCheck && !loggedIn) { pendingAnalyzeRef.current = 'viral'; setShowQr(true); return }
 
     setResults([])
     setLoading(true)
@@ -255,8 +289,12 @@ export default function Library({ userId, username, library, onDataChange }) {
           await addToLibraryAPI(userId, {
             type: 'viral',
             source: keyword,
+            originalCover: post.originalCover || '',
             originalTitle: post.originalTitle || '',
             originalContent: post.originalContent || '',
+            likes: post.likes || 0,
+            collects: post.collects || 0,
+            comments: post.comments || 0,
             coverAnalysis: post.coverAnalysis || '',
             titleAnalysis: post.titleAnalysis || '',
             contentAnalysis: post.contentAnalysis || '',
@@ -278,9 +316,13 @@ export default function Library({ userId, username, library, onDataChange }) {
     }
   }
 
+  const handleAnalyzeViral = () => {
+    doAnalyzeViral()
+  }
+
   return (
     <div className="max-w-2xl mx-auto py-8 px-4">
-      {showQr && <QrModal onSuccess={handleQrSuccess} onClose={() => { setShowQr(false); pendingAnalyzeRef.current = false }} />}
+      {showQr && <QrModal onSuccess={handleQrSuccess} onClose={() => { setShowQr(false); pendingAnalyzeRef.current = null }} />}
 
       <div className="mb-8">
         <div className="flex items-center justify-between">
@@ -349,7 +391,7 @@ export default function Library({ userId, username, library, onDataChange }) {
             disabled={loading}
             className="w-full py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-medium rounded-xl hover:from-pink-600 hover:to-rose-600 transition-all shadow-lg shadow-pink-200 disabled:opacity-50"
           >
-            {loading ? '分析中...' : loggedIn ? '开始爬取并分析' : '扫码登录后爬取'}
+            {loading ? '爬取中...' : '开始爬取并列出标题'}
           </button>
         </div>
       )}
@@ -379,15 +421,27 @@ export default function Library({ userId, username, library, onDataChange }) {
         </div>
       )}
 
-      {/* 分析结果 */}
+      {/* 分析/爬取结果 */}
       {results.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">分析结果（{results.length} 篇）</h3>
-          <div className="space-y-3">
-            {results.map((post, i) => (
-              <PostCard key={i} post={post} index={i} />
-            ))}
-          </div>
+          <h3 className="text-lg font-bold text-gray-800 mb-4">
+            {activeTab === 'influencer' ? `爬取结果（${results.length} 篇）` : `分析结果（${results.length} 篇）`}
+          </h3>
+          {activeTab === 'influencer' ? (
+            <div className="space-y-2">
+              {results.map((post, i) => (
+                <div key={i} className="p-3 bg-gray-50 rounded-xl text-sm text-gray-700">
+                  {(post.sourceName || url)} - {post.originalTitle || post.title || `帖子 ${i + 1}`}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {results.map((post, i) => (
+                <PostCard key={i} post={post} index={i} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -407,6 +461,11 @@ export default function Library({ userId, username, library, onDataChange }) {
                   </div>
                   <p className="text-gray-800 font-medium truncate">{item.originalTitle || item.titleStyle}</p>
                   {item.titleStyle && <p className="text-sm text-gray-500 mt-1">风格：{item.titleStyle}</p>}
+                  {(item.likes || item.collects || item.comments) && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      点赞 {item.likes || 0} · 收藏 {item.collects || 0} · 评论 {item.comments || 0}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => removeFromLibraryAPI(item.id).then(() => onDataChange && onDataChange())}

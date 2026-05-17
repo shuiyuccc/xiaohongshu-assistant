@@ -50,16 +50,18 @@ class NoteData:
 class XiaoHongShuScraper:
     """小红书爬虫类"""
     
-    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None):
+    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None):
         # 从配置文件读取参数，参数传入优先于配置文件
         self.headless = headless if headless is not None else config.HEADLESS
         self.output_dir = output_dir if output_dir is not None else config.OUTPUT_DIR
         self.download_images = download_images if download_images is not None else config.DOWNLOAD_IMAGES
+        self.max_notes = max_notes
 
         self.browser = None
         self.context = None
         self.page = None
         self.playwright = None
+        self.blogger_name = ""
         self.excel_file = os.path.join(self.output_dir, config.EXCEL_FILENAME)
         self.processed_titles: Set[str] = set()
 
@@ -104,11 +106,11 @@ class XiaoHongShuScraper:
             print(f"⚠️ 加载手动Cookie失败: {e}")
         return False
 
-    def _check_login_status(self) -> bool:
+    def _check_login_status(self, url: str = None) -> bool:
         """检查是否已登录"""
         try:
             # 访问主页并检查是否有登录相关的元素
-            self._navigate_to_page(config.PROFILE_URL)
+            self._navigate_to_page(url or config.PROFILE_URL)
             time.sleep(2)
 
             # 检查是否有用户头像或用户名等登录标识
@@ -161,6 +163,9 @@ class XiaoHongShuScraper:
         else:
             executable_path = config.CHROME_PATH
             print(f"使用 Chrome 浏览器: {executable_path}")
+        if executable_path and not os.path.exists(executable_path):
+            print(f"⚠️ 浏览器路径不存在，将使用 Playwright 默认浏览器: {executable_path}")
+            executable_path = None
         
         self.browser = self.playwright.chromium.launch(
             headless=self.headless,
@@ -214,7 +219,7 @@ class XiaoHongShuScraper:
                 print("\n检测到手动提供的Cookie，正在加载...")
                 if self._load_manual_cookies():
                     print("正在验证Cookie登录状态...")
-                    if self._check_login_status():
+                    if self._check_login_status(profile_url):
                         print("✓ Cookie登录成功，无需手动登录")
                         return self._process_all_notes(profile_url)
                     else:
@@ -442,6 +447,48 @@ class XiaoHongShuScraper:
                     break
         except Exception as e:
             print(f"⚠️ 更新笔记状态失败: {e}")
+
+    def _sanitize_filename(self, filename: str) -> str:
+        """清理Windows文件名中的非法字符"""
+        filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename).strip()
+        filename = re.sub(r"\s+", " ", filename)
+        return filename[:80].strip(" .") or "notes_index"
+
+    def _extract_blogger_name(self) -> str:
+        """从博主主页提取博主昵称，用于命名Excel文件"""
+        selectors = [
+            ".user-nickname .user-name",
+            ".user-name",
+            "[class*='user-nickname'] [class*='user-name']",
+            "[class*='user-name']",
+            ".nickname",
+            "[class*='nickname']",
+        ]
+
+        for selector in selectors:
+            try:
+                elem = self.page.query_selector(selector)
+                if elem:
+                    name = elem.inner_text().strip()
+                    if name:
+                        return " ".join(name.split())
+            except Exception:
+                continue
+
+        return ""
+
+    def _configure_excel_for_blogger(self) -> None:
+        """进入主页后，先提取博主名，并用博主名命名Excel"""
+        blogger_name = self._extract_blogger_name()
+        if not blogger_name:
+            print("⚠️ 未提取到博主名，继续使用默认Excel文件名")
+            return
+
+        self.blogger_name = blogger_name
+        safe_name = self._sanitize_filename(blogger_name)
+        self.excel_file = os.path.join(self.output_dir, f"{safe_name}.xlsx")
+        print(f"✓ 提取到博主名: {blogger_name}")
+        print(f"✓ Excel文件将保存为: {self.excel_file}")
     
     def _get_note_info_from_element(self, element) -> Optional[Dict]:
         """从元素中提取笔记信息（标题和链接）"""
@@ -587,6 +634,9 @@ class XiaoHongShuScraper:
         
         # 返回主页
         self._navigate_to_page(profile_url)
+
+        # 先提取博主昵称，用博主名命名本次Excel文件
+        self._configure_excel_for_blogger()
         
         # 初始化Excel
         self._init_excel()
@@ -597,6 +647,9 @@ class XiaoHongShuScraper:
         if not notes_info:
             print("⚠️ 未收集到任何笔记信息")
             return all_notes
+
+        if self.max_notes and self.max_notes > 0:
+            notes_info = notes_info[:self.max_notes]
         
         print(f"\n✓ 共收集到 {len(notes_info)} 篇笔记，开始处理...")
         
