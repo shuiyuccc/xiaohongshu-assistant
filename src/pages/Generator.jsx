@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import ImageUploader from '../components/ImageUploader'
 import OutputCard from '../components/OutputCard'
 import { generateContent, detectTheme } from '../services/ai'
@@ -11,6 +11,82 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const [results, setResults] = useState([])
   const [error, setError] = useState('')
   const [detectedTheme, setDetectedTheme] = useState('')
+  
+  // 参考来源选择
+  const [referenceSource, setReferenceSource] = useState('all') // 'all' | 'influencer' | 'viral'
+  const [selectedInfluencer, setSelectedInfluencer] = useState('')
+  
+  // 热门帖子筛选条件
+  const [viralTimeRange, setViralTimeRange] = useState('6months') // '1month' | '3months' | '6months' | '1year' | 'all'
+  const [viralTheme, setViralTheme] = useState('') // '婚礼跟拍' | '孕照跟拍' | '领证跟拍'
+
+  // 从素材库中提取博主列表（按 source 分组，只包含 type='influencer'）
+  const influencers = useMemo(() => {
+    const groups = {}
+    library.filter(item => item.type === 'influencer').forEach(item => {
+      const source = item.source || '未分类'
+      if (!groups[source]) {
+        groups[source] = []
+      }
+      groups[source].push(item)
+    })
+    return groups
+  }, [library])
+
+  const influencerList = useMemo(() => {
+    return Object.keys(influencers)
+  }, [influencers])
+  
+  // 主题选项
+  const themeOptions = [
+    { value: '婚礼跟拍', label: '婚礼跟拍', icon: '💒' },
+    { value: '孕照跟拍', label: '孕照跟拍', icon: '🤰' },
+    { value: '领证跟拍', label: '领证跟拍', icon: '💍' }
+  ]
+  
+  // 时间范围选项
+  const timeRangeOptions = [
+    { value: '1month', label: '近1个月' },
+    { value: '6months', label: '近半年' },
+    { value: '1year', label: '近1年' },
+    { value: 'all', label: '全部' }
+  ]
+  
+  // 根据筛选条件过滤热门帖子
+  const filterViralPosts = (posts, timeRange, theme) => {
+    let filtered = posts.filter(item => item.type === 'viral')
+    
+    // 按主题筛选
+    if (theme) {
+      filtered = filtered.filter(item => item.theme === theme)
+    }
+    
+    // 按时间范围筛选
+    if (timeRange !== 'all' && filtered.length > 0) {
+      const now = new Date()
+      const getStartDate = () => {
+        const date = new Date(now)
+        switch (timeRange) {
+          case '1month': date.setMonth(date.getMonth() - 1); break
+          case '6months': date.setMonth(date.getMonth() - 6); break
+          case '1year': date.setFullYear(date.getFullYear() - 1); break
+          default: return null
+        }
+        return date
+      }
+      
+      const startDate = getStartDate()
+      if (startDate) {
+        filtered = filtered.filter(item => {
+          if (!item.publishDate) return true
+          return new Date(item.publishDate) >= startDate
+        })
+      }
+    }
+    
+    // 按点赞数排序
+    return filtered.sort((a, b) => (b.likes || 0) - (a.likes || 0))
+  }
 
   const handleGenerate = async () => {
     if (images.length < 4) {
@@ -35,8 +111,22 @@ export default function Generator({ userId, username, library, onDataChange }) {
         console.log('主题识别失败，使用默认')
       }
 
+      // 根据选择的参考来源筛选素材库
+      let filteredLibrary = library
+      if (referenceSource === 'influencer' && selectedInfluencer) {
+        filteredLibrary = library.filter(item => item.source === selectedInfluencer && item.type === 'influencer')
+      } else if (referenceSource === 'viral') {
+        // 热门帖子：根据时间范围和主题筛选
+        filteredLibrary = filterViralPosts(library, viralTimeRange, viralTheme)
+      }
+      
+      // 如果没有筛选到内容，使用全部
+      if (filteredLibrary.length === 0) {
+        filteredLibrary = library
+      }
+
       // 生成内容
-      const response = await generateContent(images, keywords, library, theme)
+      const response = await generateContent(images, keywords, filteredLibrary, theme, referenceSource)
       const parsedResults = parseAIResponse(response)
       setResults(parsedResults)
 
@@ -262,6 +352,165 @@ export default function Generator({ userId, username, library, onDataChange }) {
           <p className="text-gray-400 text-sm mt-2">多个关键词用逗号分隔</p>
         </div>
 
+        {/* 参考来源选择 */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-3">3. 选择文案参考来源</label>
+          
+          {/* 参考来源类型选择 */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <button
+              onClick={() => setReferenceSource('all')}
+              disabled={library.length === 0}
+              className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-all ${
+                referenceSource === 'all'
+                  ? 'border-pink-500 bg-pink-50 text-pink-700'
+                  : 'border-gray-200 hover:border-pink-300 text-gray-600'
+              } ${library.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="text-lg mb-1">📚</div>
+              <div>全部素材</div>
+              <div className="text-xs opacity-70 mt-1">({library.length}条)</div>
+            </button>
+            
+            <button
+              onClick={() => setReferenceSource('influencer')}
+              disabled={influencerList.length === 0}
+              className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-all ${
+                referenceSource === 'influencer'
+                  ? 'border-pink-500 bg-pink-50 text-pink-700'
+                  : 'border-gray-200 hover:border-pink-300 text-gray-600'
+              } ${influencerList.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="text-lg mb-1">👤</div>
+              <div>参考博主</div>
+              <div className="text-xs opacity-70 mt-1">({influencerList.length}位)</div>
+            </button>
+            
+            <button
+              onClick={() => setReferenceSource('viral')}
+              disabled={library.length === 0}
+              className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-all ${
+                referenceSource === 'viral'
+                  ? 'border-pink-500 bg-pink-50 text-pink-700'
+                  : 'border-gray-200 hover:border-pink-300 text-gray-600'
+              } ${library.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <div className="text-lg mb-1">🔥</div>
+              <div>热门帖子</div>
+              <div className="text-xs opacity-70 mt-1">爆款文案</div>
+            </button>
+          </div>
+
+          {/* 选择具体博主 */}
+          {referenceSource === 'influencer' && influencerList.length > 0 && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-xl">
+              <label className="block text-sm font-medium text-gray-700 mb-2">选择要参考的博主</label>
+              <select
+                value={selectedInfluencer}
+                onChange={(e) => setSelectedInfluencer(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all bg-white"
+              >
+                <option value="">请选择博主...</option>
+                {influencerList.map(source => (
+                  <option key={source} value={source}>
+                    {source} ({influencers[source].length} 条素材)
+                  </option>
+                ))}
+              </select>
+              
+              {selectedInfluencer && influencers[selectedInfluencer] && (
+                <div className="mt-3 text-sm text-gray-600">
+                  <p className="font-medium text-gray-700 mb-1">该博主风格特征：</p>
+                  <div className="space-y-1">
+                    {influencers[selectedInfluencer].slice(0, 2).map((item, idx) => (
+                      <div key={idx} className="text-xs text-gray-500 bg-white p-2 rounded-lg">
+                        {item.titleStyle && <span className="block">标题：{item.titleStyle.substring(0, 50)}...</span>}
+                        {item.contentStyle && <span className="block">文案：{item.contentStyle.substring(0, 50)}...</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 热门帖子筛选面板 */}
+          {referenceSource === 'viral' && library.length > 0 && (
+            <div className="mt-4 p-4 bg-orange-50 rounded-xl">
+              <p className="font-medium text-orange-800 mb-3">🔥 热门帖子筛选</p>
+              
+              {/* 主题选择 */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">选择主题类型</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {themeOptions.map(option => (
+                    <button
+                      key={option.value}
+                      onClick={() => setViralTheme(viralTheme === option.value ? '' : option.value)}
+                      className={`py-2 px-3 rounded-lg border text-sm transition-all ${
+                        viralTheme === option.value
+                          ? 'border-orange-500 bg-orange-100 text-orange-700'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-orange-300'
+                      }`}
+                    >
+                      <span className="mr-1">{option.icon}</span>
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* 时间范围选择 */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">选择时间范围</label>
+                <div className="flex flex-wrap gap-2">
+                  {timeRangeOptions.map(option => (
+                    <button
+                      key={option.value}
+                      onClick={() => setViralTimeRange(option.value)}
+                      className={`py-2 px-4 rounded-lg border text-sm transition-all ${
+                        viralTimeRange === option.value
+                          ? 'border-orange-500 bg-orange-100 text-orange-700'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-orange-300'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* 筛选结果预览 */}
+              {(() => {
+                const filtered = filterViralPosts(library, viralTimeRange, viralTheme)
+                return (
+                  <div className="text-sm text-orange-700 bg-white/50 p-3 rounded-lg">
+                    <p className="font-medium">筛选结果</p>
+                    <p className="text-orange-600 mt-1">
+                      找到 {filtered.length} 条热门帖子
+                      {viralTheme && ` · 主题：${viralTheme}`}
+                      {viralTimeRange !== 'all' && ` · 时间：${timeRangeOptions.find(t => t.value === viralTimeRange)?.label}`}
+                    </p>
+                    {filtered.length > 0 && (
+                      <p className="text-xs text-orange-500 mt-1">
+                        已按点赞数排序，将参考前 {Math.min(5, filtered.length)} 条
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+
+          {/* 空状态提示 */}
+          {library.length === 0 && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-xl text-sm text-gray-500">
+              <p>💡 提示：请先前往「素材库」添加素材，即可使用参考来源功能</p>
+              <p className="mt-1 text-xs">支持爬取博主主页或搜索热门帖子</p>
+            </div>
+          )}
+        </div>
+
         {error && (
           <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl text-sm">
             {error}
@@ -285,13 +534,15 @@ export default function Generator({ userId, username, library, onDataChange }) {
         </button>
       </div>
 
-      {/* 结果展示 */}
+      {/* 结果展示 - 2x2 网格布局 */}
       {results.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-lg font-bold text-gray-800">生成结果</h3>
-          {results.map((item, index) => (
-            <OutputCard key={index} item={item} index={index} images={images} />
-          ))}
+        <div className="mt-8">
+          <h3 className="text-lg font-bold text-gray-800 mb-4">生成结果（4组文案）</h3>
+          <div className="grid grid-cols-2 gap-4">
+            {results.map((item, index) => (
+              <OutputCard key={index} item={item} index={index} images={images} />
+            ))}
+          </div>
         </div>
       )}
 

@@ -23,7 +23,7 @@ export default function ImageUploader({ images, onImagesChange }) {
     })
 
     Promise.all(promises).then(newImages => {
-      onImagesChange([...images, ...newImages].slice(0, 9))
+      onImagesChange([...images, ...newImages].slice(0, 50))
     })
   }
 
@@ -64,7 +64,7 @@ export default function ImageUploader({ images, onImagesChange }) {
       )}
 
       {/* 上传区域 */}
-      {images.length < 9 && (
+      {images.length < 50 && (
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
@@ -88,7 +88,7 @@ export default function ImageUploader({ images, onImagesChange }) {
               </svg>
             </div>
             <p className="text-gray-600 font-medium">点击或拖拽上传图片</p>
-            <p className="text-gray-400 text-sm mt-1">支持 JPG、PNG，最多 {9 - images.length} 张</p>
+            <p className="text-gray-400 text-sm mt-1">支持 JPG、PNG，最多 {50 - images.length} 张</p>
           </label>
         </div>
       )}

@@ -45,14 +45,20 @@ async function initDB() {
       user_id TEXT NOT NULL,
       type TEXT NOT NULL,
       source TEXT,
+      theme TEXT,
       original_cover TEXT,
       original_title TEXT,
       original_content TEXT,
+      publish_date TEXT,
+      likes INTEGER DEFAULT 0,
+      collects INTEGER DEFAULT 0,
+      comments INTEGER DEFAULT 0,
       cover_analysis TEXT,
       title_analysis TEXT,
       content_analysis TEXT,
       title_style TEXT,
       content_style TEXT,
+      viral_reason TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `)
@@ -118,14 +124,20 @@ app.get('/api/users/:name/data', (req, res) => {
         id: row[0],
         type: row[2],
         source: row[3],
-        originalTitle: row[5],
-        originalContent: row[6],
-        coverAnalysis: row[7],
-        titleAnalysis: row[8],
-        contentAnalysis: row[9],
-        titleStyle: row[10],
-        contentStyle: row[11],
-        createdAt: row[12]
+        theme: row[4],
+        originalTitle: row[6],
+        originalContent: row[7],
+        publishDate: row[8],
+        likes: row[9],
+        collects: row[10],
+        comments: row[11],
+        coverAnalysis: row[12],
+        titleAnalysis: row[13],
+        contentAnalysis: row[14],
+        titleStyle: row[15],
+        contentStyle: row[16],
+        viralReason: row[17],
+        createdAt: row[18]
       }))
     : []
 
@@ -151,21 +163,27 @@ app.post('/api/library', (req, res) => {
   const id = Date.now().toString()
 
   db.run(`
-    INSERT INTO library (id, user_id, type, source, original_cover, original_title, original_content, cover_analysis, title_analysis, content_analysis, title_style, content_style)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO library (id, user_id, type, source, theme, original_cover, original_title, original_content, publish_date, likes, collects, comments, cover_analysis, title_analysis, content_analysis, title_style, content_style, viral_reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     id,
     userId,
     item.type || 'influencer',
     item.source || '',
+    item.theme || '',
     item.originalCover || '',
     item.originalTitle || '',
     item.originalContent || '',
+    item.publishDate || '',
+    item.likes || 0,
+    item.collects || 0,
+    item.comments || 0,
     item.coverAnalysis || '',
     item.titleAnalysis || '',
     item.contentAnalysis || '',
     item.titleStyle || '',
-    item.contentStyle || ''
+    item.contentStyle || '',
+    item.viralReason || ''
   ])
 
   saveDB()

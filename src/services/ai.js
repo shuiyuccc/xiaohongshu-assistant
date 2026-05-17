@@ -163,14 +163,15 @@ export async function detectTheme(images) {
 }
 
 // 生成文案
-export async function generateContent(images, keywords, library, theme) {
+export async function generateContent(images, keywords, library, theme, referenceSource = 'all') {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('请先配置 API Key')
 
   const baseUrl = getBaseUrl()
 
-  // 图片内容构建
-  const imageContents = images.map(img => ({
+  // 图片内容构建（最多发送20张给AI，避免超出token限制）
+  const imagesToSend = images.slice(0, 20)
+  const imageContents = imagesToSend.map((img, idx) => ({
     type: 'image_url',
     image_url: {
       url: img.base64 ? `data:image/jpeg;base64,${img.base64}` : img.url
@@ -179,22 +180,51 @@ export async function generateContent(images, keywords, library, theme) {
 
   // 素材库风格构建
   let libraryContext = ''
+  let referenceHint = ''
+  
   if (library && library.length > 0) {
     const styleSummary = library.slice(0, 5).map(item => {
-      return `【标题风格】${item.titleStyle}\n【文案风格】${item.contentStyle}\n【封面分析】${item.coverAnalysis}`
+      let summary = `【标题风格】${item.titleStyle || '未分析'}\n【文案风格】${item.contentStyle || '未分析'}`
+      if (item.viralReason) {
+        summary += `\n【爆款原因】${item.viralReason}`
+      }
+      if (item.likes) {
+        summary += `\n【点赞数】${item.likes}`
+      }
+      return summary
     }).join('\n\n')
-    libraryContext = `参考素材库风格：\n${styleSummary}`
+    
+    // 根据参考来源类型添加不同的提示
+    if (referenceSource === 'influencer') {
+      referenceHint = '【重要】请重点参考以下特定博主的风格特征，模仿其独特的表达方式和内容结构：\n'
+    } else if (referenceSource === 'viral') {
+      referenceHint = '【重要】以下素材来自热门爆款帖子，请学习其爆款逻辑、钩子技巧和传播要素：\n'
+    } else {
+      referenceHint = '【参考素材库风格】\n'
+    }
+    
+    libraryContext = `${referenceHint}${styleSummary}`
   }
 
-  const prompt = `你是小红书摄影内容专家。用户上传了一组${theme}主题的照片，需要你生成4组完全不同风格的标题和文案。
+  const prompt = `你是小红书摄影内容专家。用户上传了${images.length}张${theme}主题的照片，需要你从中智能选择4张作为封面，并生成4组完全不同风格的标题和文案。
 
-照片共${images.length}张，编号为1到${images.length}。
+【照片说明】
+- 共上传${images.length}张照片，编号为1到${images.length}
+- 已为你提供前${imagesToSend.length}张照片供分析
+- 你需要从这${images.length}张中选择4张作为封面，编号范围是1-${images.length}
 
 主题：${theme}
 
 ${libraryContext}
 
-【重要】每组内容必须完全不同！4组之间要有明显差异：
+【封面选择要求】
+1. 从${images.length}张图片中选择4张作为封面
+2. 4张封面要有差异化：不同构图、不同场景、不同情绪
+3. 封面要能吸引用户点击，有视觉冲击力
+4. 封面编号必须是1-${images.length}之间的数字
+
+【内容生成要求】
+每组内容必须完全不同！4组之间要有明显差异：
 1. 标题：句式、长度、风格都要不同，不能相似
 2. 文案：内容、语气、结构都要不同，不能相似
 3. 封面：每组选不同的图片序号，不能重复
