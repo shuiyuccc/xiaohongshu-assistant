@@ -259,6 +259,10 @@ export default function Generator({ userId, username, library, onDataChange }) {
     ))
   }, [])
 
+  const handleDeleteResult = useCallback((index) => {
+    setResults(prev => prev.filter((_, itemIndex) => itemIndex !== index))
+  }, [])
+
   const handleGenerate = async () => {
     if (images.length > 0 && images.length < 4) {
       setError('请至少上传 4 张候选图片，AI 才能从中挑选 4 张封面')
@@ -939,6 +943,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
                 onRefreshTitle={handleRefreshTitle}
                 onRefreshContent={handleRefreshContent}
                 onUpdateItem={handleUpdateResult}
+                onDeleteItem={handleDeleteResult}
               />
             ))}
           </div>

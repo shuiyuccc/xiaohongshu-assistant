@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-export default function OutputCard({ item, index, images, onRefreshTitle, onRefreshContent, onUpdateItem }) {
-  const [copied, setCopied] = useState(false)
+export default function OutputCard({ item, index, images, onRefreshTitle, onRefreshContent, onUpdateItem, onDeleteItem }) {
   const [expanded, setExpanded] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(item.title || '')
@@ -73,40 +72,6 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
     }
   }
 
-  const handleCopy = async () => {
-    const text = `${titleDraft || item.title}\n\n${item.content}`
-    
-    try {
-      // 尝试使用现代 Clipboard API
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text)
-      } else {
-        // 降级方案：使用传统的复制方法
-        const textArea = document.createElement('textarea')
-        textArea.value = text
-        textArea.style.position = 'fixed'
-        textArea.style.left = '-999999px'
-        textArea.style.top = '-999999px'
-        document.body.appendChild(textArea)
-        textArea.focus()
-        textArea.select()
-        
-        const successful = document.execCommand('copy')
-        document.body.removeChild(textArea)
-        
-        if (!successful) {
-          throw new Error('复制失败')
-        }
-      }
-      
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('复制失败:', err)
-      alert('复制失败，请手动复制')
-    }
-  }
-
   // 获取封面图片
   const coverImage = images?.find(img => String(img.id) === String(item.imageId))
     || (images && item.coverIndex && item.coverIndex <= images.length ? images[item.coverIndex - 1] : null)
@@ -136,7 +101,7 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
                 onChange={(event) => setTitleDraft(event.target.value)}
                 onBlur={saveTitleDraft}
                 onKeyDown={handleTitleKeyDown}
-                className="min-w-0 flex-1 rounded-md border border-pink-200 bg-pink-50/50 px-2 py-1 text-[15px] font-semibold leading-snug text-gray-800 outline-none focus:border-pink-300 focus:bg-white"
+                className="min-w-0 flex-1 rounded-md border border-pink-200 bg-pink-50/50 px-2 py-1 text-[16px] font-bold leading-[1.38] text-gray-700 outline-none focus:border-pink-300 focus:bg-white"
               />
             ) : (
               <button
@@ -146,7 +111,7 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
                 title="编辑标题"
                 className="min-w-0 flex-1 text-left"
               >
-                <h3 className="text-[15px] font-semibold leading-snug text-gray-800 line-clamp-2 hover:text-pink-500 transition-colors">
+                <h3 className="text-[16px] font-bold leading-[1.38] text-gray-700 line-clamp-2 hover:text-pink-500 transition-colors">
                   {titleDraft || item.title}
                 </h3>
               </button>
@@ -250,25 +215,18 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
             <span className="text-xs text-gray-400">刚刚</span>
             <button
               type="button"
-              onClick={handleCopy}
-              aria-label={copied ? '已复制' : '复制文案'}
-              title={copied ? '已复制' : '复制文案'}
-              className={`h-7 w-7 rounded-full transition-colors flex items-center justify-center ${
-                copied
-                  ? 'bg-green-50 text-green-500'
-                  : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500'
-              }`}
+              onClick={() => onDeleteItem && onDeleteItem(index)}
+              aria-label="删除这组内容"
+              title="删除这组内容"
+              className="h-6 w-6 rounded-full text-gray-300 transition-colors flex items-center justify-center hover:bg-gray-100 hover:text-gray-500"
             >
-              {copied ? (
-                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.2 7.26a1 1 0 0 1-1.42.002L3.29 9.12a1 1 0 1 1 1.42-1.408l4.09 4.126 6.49-6.542a1 1 0 0 1 1.414-.006Z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-                  <rect x="6.5" y="5.5" width="8" height="10" rx="1.5" />
-                  <path d="M4.5 12.5v-8a2 2 0 0 1 2-2h6" />
-                </svg>
-              )}
+              <svg className="h-[15px] w-[15px]" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4.5 6h11" />
+                <path d="M8 6V4.8c0-.55.45-1 1-1h2c.55 0 1 .45 1 1V6" />
+                <path d="M6.3 6l.6 9.1c.04.62.56 1.1 1.18 1.1h3.84c.62 0 1.14-.48 1.18-1.1L13.7 6" />
+                <path d="M8.8 9v4.1" />
+                <path d="M11.2 9v4.1" />
+              </svg>
             </button>
           </div>
         </div>
