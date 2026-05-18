@@ -13,7 +13,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const [detectedTheme, setDetectedTheme] = useState('')
   
   // 参考来源选择
-  const [referenceSource, setReferenceSource] = useState('all') // 'all' | 'influencer' | 'viral'
+  const [referenceSource, setReferenceSource] = useState('influencer') // 'influencer' | 'viral'
   const [selectedInfluencer, setSelectedInfluencer] = useState('')
   
   // 热门帖子筛选条件
@@ -112,17 +112,12 @@ export default function Generator({ userId, username, library, onDataChange }) {
       }
 
       // 根据选择的参考来源筛选素材库
-      let filteredLibrary = library
+      let filteredLibrary = []
       if (referenceSource === 'influencer' && selectedInfluencer) {
         filteredLibrary = library.filter(item => item.source === selectedInfluencer && item.type === 'influencer')
       } else if (referenceSource === 'viral') {
         // 热门帖子：根据时间范围和主题筛选
         filteredLibrary = filterViralPosts(library, viralTimeRange, viralTheme)
-      }
-      
-      // 如果没有筛选到内容，使用全部
-      if (filteredLibrary.length === 0) {
-        filteredLibrary = library
       }
 
       // 生成内容
@@ -357,21 +352,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
           <label className="block text-sm font-medium text-gray-700 mb-3">3. 选择文案参考来源</label>
           
           {/* 参考来源类型选择 */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <button
-              onClick={() => setReferenceSource('all')}
-              disabled={library.length === 0}
-              className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-all ${
-                referenceSource === 'all'
-                  ? 'border-pink-500 bg-pink-50 text-pink-700'
-                  : 'border-gray-200 hover:border-pink-300 text-gray-600'
-              } ${library.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              <div className="text-lg mb-1">📚</div>
-              <div>全部素材</div>
-              <div className="text-xs opacity-70 mt-1">({library.length}条)</div>
-            </button>
-            
+          <div className="grid grid-cols-2 gap-3 mb-4">
             <button
               onClick={() => setReferenceSource('influencer')}
               disabled={influencerList.length === 0}
