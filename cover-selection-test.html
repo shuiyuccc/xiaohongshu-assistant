@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多图封面选择测试</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f7f7f8;
+      color: #222;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .container { max-width: 1120px; margin: 0 auto; }
+    h1 { margin: 0 0 18px; font-size: 24px; }
+    .panel {
+      background: #fff;
+      border: 1px solid #e8e8ec;
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    .settings {
+      display: grid;
+      grid-template-columns: 1.4fr 1.2fr 1fr;
+      gap: 10px;
+    }
+    label { display: block; margin-bottom: 6px; font-size: 13px; color: #666; }
+    input, textarea {
+      width: 100%;
+      border: 1px solid #d9d9df;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 14px;
+      background: #fff;
+    }
+    textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
+    .upload {
+      border: 1.5px dashed #cfcfd6;
+      border-radius: 8px;
+      padding: 26px;
+      text-align: center;
+      cursor: pointer;
+      background: #fcfcfd;
+    }
+    .upload:hover { border-color: #ff6b8a; background: #fff7f9; }
+    .upload small { color: #777; }
+    .thumbs {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .thumb {
+      position: relative;
+      border: 1px solid #e5e5ea;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .thumb img {
+      width: 100%;
+      aspect-ratio: 3 / 4;
+      object-fit: cover;
+      display: block;
+      background: #eee;
+    }
+    .badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      min-width: 28px;
+      height: 24px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .filename {
+      padding: 8px;
+      color: #555;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .actions { display: flex; gap: 10px; margin-top: 14px; }
+    button {
+      border: 0;
+      border-radius: 7px;
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .primary { flex: 1; background: #ff4f7b; color: #fff; }
+    .secondary { background: #eeeef2; color: #444; }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    .result {
+      white-space: pre-wrap;
+      line-height: 1.65;
+      font-size: 14px;
+    }
+    .error {
+      padding: 12px;
+      border-radius: 7px;
+      background: #fff1f1;
+      color: #c62828;
+    }
+    @media (max-width: 760px) {
+      body { padding: 14px; }
+      .settings { grid-template-columns: 1fr; }
+      .actions { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>多图封面选择测试</h1>
+
+    <div class="panel">
+      <div class="settings">
+        <div>
+          <label for="apiKey">API Key</label>
+          <input id="apiKey" type="password" placeholder="填入支持视觉识别的模型 Key">
+        </div>
+        <div>
+          <label for="baseUrl">Base URL</label>
+          <input id="baseUrl" type="text" value="https://dashscope.aliyuncs.com/compatible-mode/v1">
+        </div>
+        <div>
+          <label for="model">模型</label>
+          <input id="model" type="text" value="qwen-vl-plus">
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label for="extraPrompt">补充要求</label>
+      <textarea id="extraPrompt">请以小红书封面点击率为目标，优先考虑人物表情、主体清晰度、情绪张力、画面干净程度、构图、光线、色彩、缩略图可读性和用户点进去的好奇心。</textarea>
+    </div>
+
+    <div class="panel">
+      <div class="upload" id="uploadArea">
+        <strong>点击或拖拽上传多张图片</strong><br>
+        <small>会按上传顺序自动编号，模型需要从中选出 4 张最适合作为封面的图</small>
+      </div>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
+      <div class="thumbs" id="thumbs"></div>
+      <div class="actions">
+        <button class="primary" id="analyzeBtn" disabled>选择 4 张封面</button>
+        <button class="secondary" id="clearBtn">清空</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div id="result" class="result">结果会显示在这里。</div>
+    </div>
+  </div>
+
+  <script>
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const thumbs = document.getElementById('thumbs');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const result = document.getElementById('result');
+    const apiKeyInput = document.getElementById('apiKey');
+    const baseUrlInput = document.getElementById('baseUrl');
+    const modelInput = document.getElementById('model');
+
+    let images = [];
+
+    apiKeyInput.value = localStorage.getItem('cover_test_api_key') || localStorage.getItem('ai_api_key') || '';
+    baseUrlInput.value = localStorage.getItem('cover_test_base_url') || localStorage.getItem('ai_base_url') || baseUrlInput.value;
+    modelInput.value = localStorage.getItem('cover_test_model') || localStorage.getItem('ai_model') || modelInput.value;
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+    uploadArea.addEventListener('dragover', event => {
+      event.preventDefault();
+      uploadArea.style.borderColor = '#ff4f7b';
+    });
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.style.borderColor = '#cfcfd6';
+    });
+    uploadArea.addEventListener('drop', event => {
+      event.preventDefault();
+      uploadArea.style.borderColor = '#cfcfd6';
+      addFiles([...event.dataTransfer.files]);
+    });
+    fileInput.addEventListener('change', event => addFiles([...event.target.files]));
+    clearBtn.addEventListener('click', () => {
+      images = [];
+      fileInput.value = '';
+      renderThumbs();
+      result.textContent = '结果会显示在这里。';
+    });
+
+    async function addFiles(files) {
+      const imageFiles = files.filter(file => file.type.startsWith('image/'));
+      for (const file of imageFiles) {
+        const dataUrl = await readFileAsDataUrl(file);
+        images.push({ file, dataUrl });
+      }
+      renderThumbs();
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = event => resolve(event.target.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderThumbs() {
+      thumbs.innerHTML = images.map((item, index) => `
+        <div class="thumb">
+          <span class="badge">${index + 1}</span>
+          <img src="${item.dataUrl}" alt="图片 ${index + 1}">
+          <div class="filename">${escapeHtml(item.file.name)}</div>
+        </div>
+      `).join('');
+      analyzeBtn.disabled = images.length === 0;
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      }[char]));
+    }
+
+    analyzeBtn.addEventListener('click', async () => {
+      const apiKey = apiKeyInput.value.trim();
+      const baseUrl = baseUrlInput.value.trim().replace(/\/$/, '');
+      const model = modelInput.value.trim();
+      const extraPrompt = document.getElementById('extraPrompt').value.trim();
+
+      if (!apiKey) {
+        result.innerHTML = '<div class="error">请先填写 API Key。</div>';
+        return;
+      }
+      if (images.length === 0) {
+        result.innerHTML = '<div class="error">请至少上传 1 张图片。</div>';
+        return;
+      }
+
+      localStorage.setItem('cover_test_api_key', apiKey);
+      localStorage.setItem('cover_test_base_url', baseUrl);
+      localStorage.setItem('cover_test_model', model);
+
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = '模型分析中...';
+      result.textContent = '正在让模型逐张比较封面潜力...';
+
+      try {
+        const content = [];
+        images.forEach((item, index) => {
+          content.push({ type: 'text', text: `图片 ${index + 1}，文件名：${item.file.name}` });
+          content.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+        });
+
+        content.push({
+          type: 'text',
+          text: `你是小红书封面图筛选专家。请从上面 ${images.length} 张图片里选出最适合做小红书封面的 4 张；如果不足 4 张，就按实际数量选择。
+
+筛选目标：让更多人愿意在信息流里点进去。
+
+评估维度：
+1. 第一眼是否有清晰主体
+2. 人物表情、动作、情绪是否有吸引力
+3. 缩略图里是否足够清楚，不杂乱
+4. 光线、色彩、构图是否适合做封面
+5. 是否有故事感、反差感或好奇心
+6. 是否适合放小红书标题文字
+
+${extraPrompt}
+
+请按以下格式输出，不要省略图片编号：
+首选4张：图片X、图片X、图片X、图片X
+
+逐张理由：
+1. 图片X：选择理由、适合的封面标题方向、需要裁切或调色的建议
+2. 图片X：...
+
+未选图片的主要问题：
+- 图片X：问题
+
+最后给出一个总判断：这组图片整体封面素材质量如何。`
+        });
+
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content }]
+          })
+        });
+
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(data ? JSON.stringify(data, null, 2) : `HTTP ${response.status}`);
+        }
+
+        result.textContent = data?.choices?.[0]?.message?.content || '模型没有返回内容。';
+      } catch (error) {
+        result.innerHTML = `<div class="error">请求失败：${escapeHtml(error.message)}</div>`;
+      } finally {
+        analyzeBtn.disabled = images.length === 0;
+        analyzeBtn.textContent = '选择 4 张封面';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -50,15 +50,19 @@ class NoteData:
 class XiaoHongShuScraper:
     """小红书爬虫类"""
     
-    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None, existing_note_ids: Set[str] = None, excel_suffix: str = None):
+    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None, existing_note_ids: Set[str] = None, excel_suffix: str = None, history_output_dir: str = None):
         # 从配置文件读取参数，参数传入优先于配置文件
         self.headless = headless if headless is not None else config.HEADLESS
         self.output_dir = output_dir if output_dir is not None else config.OUTPUT_DIR
         self.download_images = download_images if download_images is not None else config.DOWNLOAD_IMAGES
         self.max_notes = max_notes
         self.existing_note_ids = existing_note_ids or set()  # 已存在的 note_id 集合（用于增量爬取）
+        self.existing_note_urls: Set[str] = set()
+        self.existing_note_titles: Set[str] = set()
+        self.skipped_existing_count = 0
         self.new_notes_count = 0  # 已处理的新笔记数量
         self.excel_suffix = excel_suffix  # Excel 文件名后缀（如日期）
+        self.history_output_dir = history_output_dir
 
         self.browser = None
         self.context = None
@@ -401,6 +405,58 @@ class XiaoHongShuScraper:
             print(f"✓ 从Excel加载了 {len(self.processed_titles)} 个已处理的笔记")
         except Exception as e:
             print(f"⚠️ 加载Excel失败: {e}")
+
+    def _load_existing_notes_from_history(self) -> None:
+        """从正式博主目录的历史 Excel 中加载已爬笔记，用于真正的增量爬取。"""
+        if not self.history_output_dir or not self.blogger_name:
+            return
+
+        safe_name = self._sanitize_filename(self.blogger_name)
+        blogger_dir = os.path.join(self.history_output_dir, safe_name)
+        if not os.path.isdir(blogger_dir):
+            return
+
+        before_ids = len(self.existing_note_ids)
+        before_urls = len(self.existing_note_urls)
+        before_titles = len(self.existing_note_titles)
+        excel_files = []
+
+        for root, _, files in os.walk(blogger_dir):
+            for filename in files:
+                if filename.endswith(".xlsx") and not filename.startswith("~$"):
+                    excel_files.append(os.path.join(root, filename))
+
+        for excel_path in excel_files:
+            try:
+                wb = load_workbook(excel_path, read_only=True, data_only=True)
+                ws = wb.active
+                rows = ws.iter_rows(values_only=True)
+                headers = next(rows, [])
+                header_map = {str(value).strip(): index for index, value in enumerate(headers) if value is not None}
+
+                title_col = header_map.get("标题")
+                note_id_col = header_map.get("笔记ID")
+                url_col = header_map.get("链接")
+
+                for row in rows:
+                    if note_id_col is not None and note_id_col < len(row) and row[note_id_col]:
+                        self.existing_note_ids.add(str(row[note_id_col]).strip())
+                    if url_col is not None and url_col < len(row) and row[url_col]:
+                        self.existing_note_urls.add(str(row[url_col]).strip())
+                    if title_col is not None and title_col < len(row) and row[title_col]:
+                        self.existing_note_titles.add(str(row[title_col]).strip())
+                wb.close()
+            except Exception as e:
+                print(f"⚠️ 读取历史Excel失败: {excel_path}，{e}")
+
+        added_ids = len(self.existing_note_ids) - before_ids
+        added_urls = len(self.existing_note_urls) - before_urls
+        added_titles = len(self.existing_note_titles) - before_titles
+        if excel_files:
+            print(
+                f"✓ 从历史Excel加载已爬记录：{len(excel_files)} 个文件，"
+                f"新增 {added_ids} 个笔记ID / {added_urls} 个链接 / {added_titles} 个标题"
+            )
     
     def _add_note_to_excel(self, index: int, title: str, content: str, likes: str, 
                            collects: str, comments: str, note_id: str, 
@@ -613,7 +669,11 @@ class XiaoHongShuScraper:
         1. 跳过已存在的 note_id
         2. 只收集新的笔记，直到达到 max_notes 数量
         """
-        is_incremental = len(self.existing_note_ids) > 0
+        is_incremental = (
+            len(self.existing_note_ids) > 0
+            or len(self.existing_note_urls) > 0
+            or len(self.existing_note_titles) > 0
+        )
         if is_incremental:
             print(f"\n[增量爬取] 开始滚动收集新笔记（目标：{self.max_notes} 条新笔记）...")
             print(f"[增量爬取] 已存在 {len(self.existing_note_ids)} 条笔记，将自动跳过")
@@ -624,6 +684,9 @@ class XiaoHongShuScraper:
         seen_titles = set()
         seen_note_ids = set()
         max_scroll_attempts = config.SCROLL_MAX_ATTEMPTS
+        if is_incremental and self.max_notes:
+            # 二次/多次爬取时，前面的旧笔记会被跳过，需要更深地滚动才能收满“新增数量”。
+            max_scroll_attempts = max(config.SCROLL_MAX_ATTEMPTS, 30)
         scroll_pause_time = config.SCROLL_PAUSE_TIME
         no_new_count = 0
         skipped_count = 0
@@ -644,11 +707,6 @@ class XiaoHongShuScraper:
                 if not info:
                     continue
                     
-                # 检查标题是否已见过
-                if info['title'] in seen_titles:
-                    continue
-                seen_titles.add(info['title'])
-                
                 # 检查 note_id 是否已存在（增量爬取逻辑）
                 note_id = info.get('note_id', '')
                 if note_id:
@@ -662,6 +720,21 @@ class XiaoHongShuScraper:
                         skipped_count += 1
                         current_skipped += 1
                         continue
+
+                # 如果历史数据里没有 note_id，使用链接或标题兜底跳过
+                if info.get('url') and info['url'] in self.existing_note_urls:
+                    skipped_count += 1
+                    current_skipped += 1
+                    continue
+                if info.get('title') and info['title'] in self.existing_note_titles:
+                    skipped_count += 1
+                    current_skipped += 1
+                    continue
+
+                # 检查标题是否在本批次见过
+                if info['title'] in seen_titles:
+                    continue
+                seen_titles.add(info['title'])
                 
                 # 是新笔记，添加到列表
                 all_notes_info.append(info)
@@ -713,6 +786,7 @@ class XiaoHongShuScraper:
             self.page.evaluate(f"window.scrollTo(0, {new_scroll})")
             time.sleep(scroll_pause_time)
         
+        self.skipped_existing_count = skipped_count
         return all_notes_info
     
     def _process_all_notes(self, profile_url: str) -> List[NoteData]:
@@ -724,6 +798,7 @@ class XiaoHongShuScraper:
 
         # 先提取博主昵称，用博主名命名本次Excel文件
         self._configure_excel_for_blogger()
+        self._load_existing_notes_from_history()
         
         # 初始化Excel
         self._init_excel()

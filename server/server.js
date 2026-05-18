@@ -463,7 +463,8 @@ function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = []
           outputDir: parsed.outputDir || '',
           bloggerName: parsed.bloggerName || '',
           sourceName: parsed.sourceName || parsed.bloggerName || sourceName,
-          skippedCount: parsed.skippedCount || 0
+          skippedCount: parsed.skippedCount || 0,
+          knownExistingCount: parsed.knownExistingCount || 0
         })
       } catch (err) {
         reject(new Error(`爬虫结果解析失败: ${err.message}`))
@@ -539,6 +540,26 @@ async function readAllExcelPosts(bloggerName) {
   ])
 
   return Array.isArray(result.posts) ? result.posts : []
+}
+
+async function readAllKnownExcelNoteIds() {
+  const noteIds = new Set()
+  const listResult = await runPythonJson(EXCEL_READER, [
+    '--mode',
+    'list',
+    '--output-dir',
+    XHS_OUTPUT_DIR
+  ])
+
+  const bloggers = Array.isArray(listResult.bloggers) ? listResult.bloggers : []
+  for (const blogger of bloggers) {
+    const posts = await readAllExcelPosts(blogger.name).catch(() => [])
+    for (const post of posts) {
+      if (post.noteId) noteIds.add(post.noteId)
+    }
+  }
+
+  return [...noteIds]
 }
 
 function uniquePosts(posts) {
@@ -859,20 +880,39 @@ app.get('/api/xhs/qr-login/status', async (req, res) => {
   }
 })
 
-// 获取指定博主已存在的 note_id 列表（用于增量爬取）
-app.get('/api/xhs/existing-notes', (req, res) => {
+// 获取已存在的 note_id 列表（用于增量爬取）
+app.get('/api/xhs/existing-notes', async (req, res) => {
   const { userId, source } = req.query
   if (!userId || !source) {
     return res.status(400).json({ error: '缺少 userId 或 source 参数' })
   }
 
   try {
-    const result = db.exec(
+    const noteIds = new Set()
+
+    const exactResult = db.exec(
       'SELECT note_id FROM library WHERE user_id = ? AND source = ? AND note_id IS NOT NULL AND note_id != ""',
       [userId, source]
     )
-    const noteIds = result.length > 0 ? result[0].values.map(row => row[0]) : []
-    res.json({ noteIds })
+    const exactNoteIds = exactResult.length > 0 ? exactResult[0].values.map(row => row[0]) : []
+    exactNoteIds.forEach(id => noteIds.add(id))
+
+    // source 可能是用户输入的主页 URL，而素材库里保存的是爬虫识别出的博主名。
+    // note_id 是全站唯一的，所以这里合并该用户所有已爬博主 note_id，保证二次爬取会跳过旧笔记。
+    const allLibraryResult = db.exec(
+      'SELECT note_id FROM library WHERE user_id = ? AND type = ? AND note_id IS NOT NULL AND note_id != ""',
+      [userId, 'influencer']
+    )
+    const allLibraryNoteIds = allLibraryResult.length > 0 ? allLibraryResult[0].values.map(row => row[0]) : []
+    allLibraryNoteIds.forEach(id => noteIds.add(id))
+
+    const excelNoteIds = await readAllKnownExcelNoteIds().catch(err => {
+      console.error('[增量爬取] 读取 Excel note_id 失败:', err)
+      return []
+    })
+    excelNoteIds.forEach(id => noteIds.add(id))
+
+    res.json({ noteIds: [...noteIds] })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

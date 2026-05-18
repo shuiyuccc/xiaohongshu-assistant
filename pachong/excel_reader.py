@@ -11,6 +11,8 @@ from openpyxl import load_workbook
 
 TITLE_HEADERS = {"标题", "title", "Title"}
 CONTENT_HEADERS = {"正文", "内容", "文案", "content", "Content"}
+NOTE_ID_HEADERS = {"笔记ID", "note_id", "noteId", "Note ID"}
+URL_HEADERS = {"链接", "URL", "url", "Url"}
 
 
 def _safe_text(value):
@@ -34,6 +36,8 @@ def _iter_excel_files(root):
 def _find_columns(headers):
     title_col = None
     content_col = None
+    note_id_col = None
+    url_col = None
 
     for index, header in enumerate(headers):
         text = _safe_text(header)
@@ -41,8 +45,12 @@ def _find_columns(headers):
             title_col = index
         elif text in CONTENT_HEADERS:
             content_col = index
+        elif text in NOTE_ID_HEADERS:
+            note_id_col = index
+        elif text in URL_HEADERS:
+            url_col = index
 
-    return title_col, content_col
+    return title_col, content_col, note_id_col, url_col
 
 
 def _read_posts(path, limit=None):
@@ -51,7 +59,7 @@ def _read_posts(path, limit=None):
         sheet = workbook.active
         rows = sheet.iter_rows(values_only=True)
         headers = next(rows, [])
-        title_col, content_col = _find_columns(headers)
+        title_col, content_col, note_id_col, url_col = _find_columns(headers)
 
         if title_col is None or content_col is None:
             return []
@@ -66,6 +74,8 @@ def _read_posts(path, limit=None):
             posts.append({
                 "title": title,
                 "content": content,
+                "noteId": _safe_text(row[note_id_col] if note_id_col is not None and note_id_col < len(row) else ""),
+                "url": _safe_text(row[url_col] if url_col is not None and url_col < len(row) else ""),
             })
 
         return posts[:limit] if limit else posts
@@ -76,8 +86,9 @@ def _read_posts(path, limit=None):
 def _blogger_name_from_path(root, path):
     root = Path(root).resolve()
     path = Path(path).resolve()
-    if path.parent != root:
-        return path.parent.name
+    relative = path.relative_to(root)
+    if len(relative.parts) > 1:
+        return relative.parts[0]
 
     return re.sub(r"(_\d{8})(_\d{6})?$", "", path.stem)
 
@@ -102,6 +113,21 @@ def _latest_files_by_blogger(root):
     }
 
 
+def _dedupe_posts(posts):
+    deduped = []
+    seen = set()
+    for post in posts:
+        note_id = post.get("noteId") or ""
+        title = post.get("title") or ""
+        content = post.get("content") or ""
+        key = f"id:{note_id}" if note_id else f"text:{title}\n{content}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(post)
+    return deduped
+
+
 def list_bloggers(root):
     bloggers = []
     for name, paths in sorted(_files_by_blogger(root).items()):
@@ -109,6 +135,7 @@ def list_bloggers(root):
         latest_path = paths[0]
         for path in paths:
             all_posts.extend(_read_posts(path, limit=None))
+        all_posts = _dedupe_posts(all_posts)
 
         bloggers.append({
             "name": name,
@@ -130,7 +157,7 @@ def _find_blogger_files(root, blogger_name):
     # 如果存在博主专属文件夹，读取该文件夹下所有 Excel
     if blogger_dir.exists() and blogger_dir.is_dir():
         excel_files = sorted(
-            [f for f in blogger_dir.glob("*.xlsx") if f.is_file() and not f.name.startswith("~$")],
+            [f for f in blogger_dir.rglob("*.xlsx") if f.is_file() and not f.name.startswith("~$")],
             key=lambda p: p.stat().st_mtime,
             reverse=True  # 最新的在前
         )
@@ -159,6 +186,9 @@ def read_blogger(root, name, limit):
         mtime = path.stat().st_mtime
         if mtime > latest_mtime:
             latest_mtime = mtime
+
+    all_posts = _dedupe_posts(all_posts)
+    total_count = len(all_posts)
 
     # 如果有 limit，限制返回数量
     if limit and limit != 'all':

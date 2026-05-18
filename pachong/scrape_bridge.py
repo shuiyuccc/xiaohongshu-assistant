@@ -141,6 +141,7 @@ def run(args):
         max_notes=args.count,
         existing_note_ids=existing_note_ids,
         excel_suffix=date_suffix,
+        history_output_dir=str(output_root),
     )
 
     notes = scraper.get_all_notes(args.url) or []
@@ -186,7 +187,8 @@ def run(args):
         "outputDir": str(blogger_dir),
         "bloggerName": blogger_name,
         "sourceName": blogger_name or args.source_name or args.url,
-        "skippedCount": len(existing_note_ids),
+        "skippedCount": scraper.skipped_existing_count,
+        "knownExistingCount": len(existing_note_ids),
     }
 
 
