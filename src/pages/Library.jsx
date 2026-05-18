@@ -223,6 +223,12 @@ export default function Library({ userId, username, library, onDataChange }) {
       const { posts: rawPosts, sourceName, skippedCount, styleProfile, styleProfileError } = await scrapeInfluencerAPI(url, count, existingNoteIds)
       
       if (!rawPosts || rawPosts.length === 0) {
+        if (styleProfile) {
+          setResults([])
+          setStatus(`没有新笔记需要存入素材库，但已根据该博主 Excel 生成 style_profile.md/json（参考 ${styleProfile.postCount} 条素材）`)
+          onDataChange && onDataChange()
+          return
+        }
         if (skippedCount > 0) {
           throw new Error(`该博主的所有笔记都已存在（共跳过 ${skippedCount} 条），无需重复爬取`)
         }
@@ -269,7 +275,7 @@ export default function Library({ userId, username, library, onDataChange }) {
       }
 
       const styleMsg = styleProfile
-        ? `，风格文件已生成（参考 ${styleProfile.postCount} 条素材）`
+        ? `，风格文件已生成：style_profile.md/json（参考 ${styleProfile.postCount} 条素材）`
         : styleProfileError
           ? `，但风格文件生成失败：${styleProfileError}`
           : ''

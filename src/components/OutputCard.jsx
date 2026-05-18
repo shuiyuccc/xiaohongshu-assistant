@@ -4,11 +4,38 @@ export default function OutputCard({ item, index, images }) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const text = `${item.title}\n\n${item.content}`
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    
+    try {
+      // 尝试使用现代 Clipboard API
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        // 降级方案：使用传统的复制方法
+        const textArea = document.createElement('textarea')
+        textArea.value = text
+        textArea.style.position = 'fixed'
+        textArea.style.left = '-999999px'
+        textArea.style.top = '-999999px'
+        document.body.appendChild(textArea)
+        textArea.focus()
+        textArea.select()
+        
+        const successful = document.execCommand('copy')
+        document.body.removeChild(textArea)
+        
+        if (!successful) {
+          throw new Error('复制失败')
+        }
+      }
+      
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('复制失败:', err)
+      alert('复制失败，请手动复制')
+    }
   }
 
   // 获取封面图片

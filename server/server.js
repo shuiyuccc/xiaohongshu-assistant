@@ -96,9 +96,21 @@ async function initDB() {
   `)
 
   const libraryMigrated = migrateTableColumns('library', {
+    source: 'TEXT',
     theme: 'TEXT',
     note_id: 'TEXT',
+    original_cover: 'TEXT',
+    original_title: 'TEXT',
+    original_content: 'TEXT',
     publish_date: 'TEXT',
+    likes: 'INTEGER DEFAULT 0',
+    collects: 'INTEGER DEFAULT 0',
+    comments: 'INTEGER DEFAULT 0',
+    cover_analysis: 'TEXT',
+    title_analysis: 'TEXT',
+    content_analysis: 'TEXT',
+    title_style: 'TEXT',
+    content_style: 'TEXT',
     viral_reason: 'TEXT'
   })
   if (libraryMigrated) saveDB()
