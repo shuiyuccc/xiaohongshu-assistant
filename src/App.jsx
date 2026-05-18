@@ -5,17 +5,9 @@ import Library from './pages/Library'
 import { getOrCreateUser, getUserData } from './services/api'
 
 function SettingsModal({ open, onClose }) {
-  const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('')
-  const [model, setModel] = useState('deepseek-chat')
-
-  useEffect(() => {
-    if (open) {
-      setApiKey(localStorage.getItem('ai_api_key') || '')
-      setBaseUrl(localStorage.getItem('ai_base_url') || 'https://api.deepseek.com')
-      setModel(localStorage.getItem('ai_model') || 'deepseek-chat')
-    }
-  }, [open])
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('ai_api_key') || '')
+  const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem('ai_base_url') || 'https://api.deepseek.com')
+  const [model, setModel] = useState(() => localStorage.getItem('ai_model') || 'deepseek-chat')
 
   const handleSave = () => {
     localStorage.setItem('ai_api_key', apiKey)
