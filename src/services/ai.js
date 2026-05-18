@@ -46,17 +46,27 @@ function buildReferenceSample(item, index) {
   if (originalContent) {
     parts.push(`正文：${originalContent}`)
   }
-  if (item.titleStyle) {
-    parts.push(`标题风格：${truncateText(item.titleStyle, 220)}`)
-  }
-  if (item.contentStyle) {
-    parts.push(`正文风格：${truncateText(item.contentStyle, 260)}`)
-  }
   if (item.viralReason) {
     parts.push(`爆款原因：${truncateText(item.viralReason, 220)}`)
   }
 
   return parts.join('\n')
+}
+
+function buildInfluencerStylePrompt(referenceSamples) {
+  return `你是一名小红书文案风格分析师。请基于下面这位博主的所有标题和正文，提炼一个可用于后续仿写的「风格总结」。
+
+请深度分析，不要泛泛而谈。重点观察：
+1. 标题撰写特征：常见句式、标题长度、标点习惯、情绪强度、钩子方式、是否爱用反差/疑问/感叹/场景化词汇。
+2. 正文撰写特征：开头方式、段落长度、换行节奏、叙事顺序、口语化程度、常见语气词、emoji 使用、是否爱用清单/故事/感谢/感受。
+3. 内容结构特征：通常先写什么、再写什么、如何收束、如何植入摄影师身份或备婚干货。
+4. 标签特征：标签数量、标签类型、地域词、业务词、场景词的组合方式。
+5. 仿写注意事项：哪些地方可以模仿，哪些原句/标题倾向必须避免照搬。
+
+输出一份结构化风格总结，控制在 900 字以内。只输出风格总结，不要创作新文案。
+
+【博主素材】
+${referenceSamples}`
 }
 
 // 通用请求
@@ -191,8 +201,26 @@ export async function detectTheme(images) {
   return '婚礼跟拍' // 默认
 }
 
+// 分析博主风格（用于生成风格文件）
+export async function analyzeInfluencerStyle(library) {
+  if (!library || library.length === 0) {
+    throw new Error('没有素材可供分析')
+  }
+  
+  const referenceSamples = library.map((item, index) => buildReferenceSample(item, index)).join('\n\n')
+  
+  const styleProfile = await chat([
+    {
+      role: 'user',
+      content: buildInfluencerStylePrompt(referenceSamples)
+    }
+  ])
+  
+  return styleProfile
+}
+
 // 生成文案
-export async function generateContent(images, keywords, library, theme, referenceSource = 'all') {
+export async function generateContent(images, keywords, library, theme, referenceSource = 'all', bloggerStyleProfile = null) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('请先配置 API Key')
 
@@ -213,12 +241,34 @@ export async function generateContent(images, keywords, library, theme, referenc
   let referenceHint = ''
   
   if (library && library.length > 0) {
-    const styleSummary = library.map((item, index) => buildReferenceSample(item, index)).join('\n\n')
+    const referenceSamples = library.map((item, index) => buildReferenceSample(item, index)).join('\n\n')
     
     // 根据参考来源类型添加不同的提示
     if (referenceSource === 'influencer') {
+      // 如果传入了风格总结（从文件读取），直接使用；否则实时生成
+      let styleProfile = bloggerStyleProfile
+      
+      if (!styleProfile) {
+        try {
+          styleProfile = await chat([
+            {
+              role: 'user',
+              content: buildInfluencerStylePrompt(referenceSamples)
+            }
+          ])
+        } catch (err) {
+          console.error('风格分析失败:', err)
+          styleProfile = '（风格分析失败，将基于原始素材直接生成）'
+        }
+      }
+
       referenceHint = `【参考博主全量素材】
-下面是该博主 Excel 中所有可用素材。你不是泛泛参考，而是要模仿这位博主的写法：
+下面先给出已基于全量素材提炼出的博主风格总结，然后给出该博主 Excel 中所有可用素材。你不是泛泛参考，而是要基于风格总结和原始素材模仿这位博主的写法。
+
+【该博主风格总结】
+${styleProfile}
+
+【仿写要求】
 - 模仿标题的句式、长度、标点、情绪强度、口语感和小红书钩子方式
 - 模仿正文的段落节奏、换行习惯、表达顺序、语气词、emoji 和话题标签习惯
 - 必须融合用户关键词重新创作
@@ -233,7 +283,7 @@ export async function generateContent(images, keywords, library, theme, referenc
       referenceHint = '【参考素材库风格】\n'
     }
     
-    libraryContext = `${referenceHint}${styleSummary}`
+    libraryContext = `${referenceHint}${referenceSamples}`
   }
 
   const imageInstruction = hasImages ? `用户上传了${images.length}张${theme}主题的照片，需要你从中智能选择4张作为封面，并生成4组完全不同风格的标题和文案。

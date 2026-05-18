@@ -85,6 +85,19 @@ export async function getExcelBloggerPosts(name, limit = 30) {
   return request(`/xhs/excel-bloggers/${encodeURIComponent(name)}/posts?limit=${limit}`)
 }
 
+// 获取博主风格文件
+export async function getBloggerStyle(name) {
+  return request(`/xhs/bloggers/${encodeURIComponent(name)}/style`)
+}
+
+// 保存博主风格文件
+export async function saveBloggerStyle(name, style) {
+  return request(`/xhs/bloggers/${encodeURIComponent(name)}/style`, {
+    method: 'POST',
+    body: JSON.stringify({ style })
+  })
+}
+
 export async function searchViral(keyword, count) {
   return request('/xhs/search', {
     method: 'POST',

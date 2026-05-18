@@ -50,7 +50,7 @@ class NoteData:
 class XiaoHongShuScraper:
     """小红书爬虫类"""
     
-    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None, existing_note_ids: Set[str] = None):
+    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None, existing_note_ids: Set[str] = None, excel_suffix: str = None):
         # 从配置文件读取参数，参数传入优先于配置文件
         self.headless = headless if headless is not None else config.HEADLESS
         self.output_dir = output_dir if output_dir is not None else config.OUTPUT_DIR
@@ -58,6 +58,7 @@ class XiaoHongShuScraper:
         self.max_notes = max_notes
         self.existing_note_ids = existing_note_ids or set()  # 已存在的 note_id 集合（用于增量爬取）
         self.new_notes_count = 0  # 已处理的新笔记数量
+        self.excel_suffix = excel_suffix  # Excel 文件名后缀（如日期）
 
         self.browser = None
         self.context = None
@@ -488,7 +489,13 @@ class XiaoHongShuScraper:
 
         self.blogger_name = blogger_name
         safe_name = self._sanitize_filename(blogger_name)
-        self.excel_file = os.path.join(self.output_dir, f"{safe_name}.xlsx")
+        
+        # 如果有后缀（如日期），添加到文件名
+        if self.excel_suffix:
+            self.excel_file = os.path.join(self.output_dir, f"{safe_name}_{self.excel_suffix}.xlsx")
+        else:
+            self.excel_file = os.path.join(self.output_dir, f"{safe_name}.xlsx")
+        
         print(f"✓ 提取到博主名: {blogger_name}")
         print(f"✓ Excel文件将保存为: {self.excel_file}")
     

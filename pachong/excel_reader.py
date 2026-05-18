@@ -97,22 +97,58 @@ def list_bloggers(root):
     return {"bloggers": bloggers}
 
 
-def read_blogger(root, name, limit):
+def _find_blogger_files(root, blogger_name):
+    """查找博主文件夹下的所有 Excel 文件"""
+    root = Path(root).resolve()
+    blogger_dir = root / blogger_name
+    
+    # 如果存在博主专属文件夹，读取该文件夹下所有 Excel
+    if blogger_dir.exists() and blogger_dir.is_dir():
+        excel_files = sorted(
+            [f for f in blogger_dir.glob("*.xlsx") if f.is_file() and not f.name.startswith("~$")],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True  # 最新的在前
+        )
+        if excel_files:
+            return excel_files
+    
+    # 回退到旧逻辑：在根目录查找
     latest = _latest_files_by_blogger(root)
-    path = latest.get(name)
-    if not path:
+    path = latest.get(blogger_name)
+    return [path] if path else []
+
+
+def read_blogger(root, name, limit):
+    excel_files = _find_blogger_files(root, name)
+    if not excel_files:
         raise FileNotFoundError(f"未找到博主 Excel: {name}")
 
-    posts = _read_posts(path, limit=limit)
+    # 读取所有 Excel 文件的内容
+    all_posts = []
+    total_count = 0
+    latest_mtime = 0
+    
+    for path in excel_files:
+        posts = _read_posts(path, limit=None)
+        all_posts.extend(posts)
+        total_count += len(posts)
+        mtime = path.stat().st_mtime
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+
+    # 如果有 limit，限制返回数量
+    if limit and limit != 'all':
+        all_posts = all_posts[:limit]
+
     return {
         "blogger": {
             "name": name,
-            "postCount": len(_read_posts(path, limit=None)),
-            "modifiedAt": path.stat().st_mtime,
-            "fileName": path.name,
-            "runDir": path.parent.name,
+            "postCount": total_count,
+            "modifiedAt": latest_mtime,
+            "fileCount": len(excel_files),
+            "fileNames": [f.name for f in excel_files],
         },
-        "posts": posts,
+        "posts": all_posts,
     }
 
 

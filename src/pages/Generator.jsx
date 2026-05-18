@@ -1,12 +1,13 @@
 import { useEffect, useState, useMemo } from 'react'
 import OutputCard from '../components/OutputCard'
-import { generateContent, detectTheme } from '../services/ai'
-import { addToHistory, getExcelBloggerPosts, getExcelBloggers } from '../services/api'
+import { generateContent, detectTheme, analyzeInfluencerStyle } from '../services/ai'
+import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, saveBloggerStyle } from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
   const [images] = useState([])
   const [keywords, setKeywords] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadingStatus, setLoadingStatus] = useState('')
   const [results, setResults] = useState([])
   const [error, setError] = useState('')
   const [detectedTheme, setDetectedTheme] = useState('')
@@ -169,6 +170,8 @@ export default function Generator({ userId, username, library, onDataChange }) {
 
       // 根据选择的参考来源筛选素材库
       let filteredLibrary = []
+      let bloggerStyleProfile = null
+      
       if (referenceSource === 'influencer' && selectedInfluencer) {
         const [sourceType, ...nameParts] = selectedInfluencer.split(':')
         const influencerName = nameParts.join(':')
@@ -181,6 +184,27 @@ export default function Generator({ userId, username, library, onDataChange }) {
             originalTitle: post.title,
             originalContent: post.content
           }))
+          
+          // 检查是否有风格文件
+          setLoadingStatus('正在检查博主风格文件...')
+          const styleData = await getBloggerStyle(influencerName)
+          
+          if (styleData.exists && styleData.style) {
+            bloggerStyleProfile = styleData.style
+            setLoadingStatus('已找到博主风格文件，正在生成...')
+          } else {
+            // 生成风格文件
+            setLoadingStatus('首次分析该博主，正在生成风格文件...')
+            try {
+              bloggerStyleProfile = await analyzeInfluencerStyle(filteredLibrary)
+              // 保存风格文件
+              await saveBloggerStyle(influencerName, bloggerStyleProfile)
+              setLoadingStatus('风格文件已保存，正在生成内容...')
+            } catch (e) {
+              console.error('生成风格文件失败:', e)
+              setLoadingStatus('风格分析失败，直接生成内容...')
+            }
+          }
         } else {
           filteredLibrary = library.filter(item => item.source === influencerName && item.type === 'influencer')
         }
@@ -190,7 +214,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
       }
 
       // 生成内容
-      const response = await generateContent(images, keywords, filteredLibrary, theme, referenceSource)
+      const response = await generateContent(images, keywords, filteredLibrary, theme, referenceSource, bloggerStyleProfile)
       const parsedResults = parseAIResponse(response)
       setResults(parsedResults)
 

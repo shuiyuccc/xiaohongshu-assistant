@@ -461,6 +461,66 @@ app.get('/api/xhs/excel-bloggers/:name/posts', async (req, res) => {
   }
 })
 
+// 获取博主风格文件路径
+function getStyleFilePath(bloggerName) {
+  const safeName = bloggerName.replace(/[<>:"/\\|?*]/g, '_')
+  const bloggerDir = path.join(XHS_OUTPUT_DIR, safeName)
+  return path.join(bloggerDir, 'style_profile.json')
+}
+
+// 读取博主风格文件
+app.get('/api/xhs/bloggers/:name/style', (req, res) => {
+  const { name } = req.params
+  const styleFilePath = getStyleFilePath(name)
+
+  try {
+    if (fs.existsSync(styleFilePath)) {
+      const content = fs.readFileSync(styleFilePath, 'utf-8')
+      const styleData = JSON.parse(content)
+      res.json({
+        exists: true,
+        style: styleData.style,
+        updatedAt: styleData.updatedAt
+      })
+    } else {
+      res.json({ exists: false, style: null })
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 保存/更新博主风格文件
+app.post('/api/xhs/bloggers/:name/style', (req, res) => {
+  const { name } = req.params
+  const { style } = req.body
+
+  if (!style) {
+    return res.status(400).json({ error: '缺少 style 参数' })
+  }
+
+  const styleFilePath = getStyleFilePath(name)
+
+  try {
+    // 确保博主文件夹存在
+    const bloggerDir = path.dirname(styleFilePath)
+    if (!fs.existsSync(bloggerDir)) {
+      fs.mkdirSync(bloggerDir, { recursive: true })
+    }
+
+    const styleData = {
+      bloggerName: name,
+      style: style,
+      updatedAt: new Date().toISOString()
+    }
+
+    fs.writeFileSync(styleFilePath, JSON.stringify(styleData, null, 2), 'utf-8')
+    res.json({ success: true, updatedAt: styleData.updatedAt })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // 检查登录态
 app.get('/api/xhs/session', (req, res) => {
   const cookies = loadCookies()

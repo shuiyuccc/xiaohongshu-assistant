@@ -111,40 +111,81 @@ def _apply_runtime_config(args, run_dir: Path):
         config.HEADLESS = args.headless
 
 
+def _sanitize_filename(name: str) -> str:
+    """清理文件名，移除非法字符"""
+    import re
+    return re.sub(r'[<>:"/\\|?*]', '_', name).strip()
+
+
 def run(args):
     output_root = Path(args.output_dir).resolve()
-    run_dir = output_root / datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    _apply_runtime_config(args, run_dir)
-
+    
+    # 生成日期后缀用于 Excel 文件名
+    date_suffix = datetime.now().strftime("%Y%m%d")
+    
     # 从环境变量读取已存在的 note_id 列表
     existing_note_ids = set()
     if os.environ.get("EXISTING_NOTE_IDS"):
         existing_note_ids = set(os.environ["EXISTING_NOTE_IDS"].split(","))
         print(f"[增量爬取] 已存在 {len(existing_note_ids)} 条笔记，将自动跳过")
 
+    # 先使用临时目录运行爬虫
+    temp_dir = output_root / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    _apply_runtime_config(args, temp_dir)
+
     scraper = XiaoHongShuScraper(
         headless=config.HEADLESS,
-        output_dir=str(run_dir),
+        output_dir=str(temp_dir),
         download_images=config.DOWNLOAD_IMAGES,
         max_notes=args.count,
         existing_note_ids=existing_note_ids,
+        excel_suffix=date_suffix,
     )
 
     notes = scraper.get_all_notes(args.url) or []
     posts = [_normalize_note(note) for note in notes]
 
-    folder_posts = _read_generated_note_folders(run_dir)
+    folder_posts = _read_generated_note_folders(temp_dir)
     if folder_posts:
         posts_by_title = {post.get("title"): post for post in posts if post.get("title")}
         for folder_post in folder_posts:
             if folder_post["title"] not in posts_by_title:
                 posts.append(folder_post)
 
+    # 获取博主名并创建博主专属文件夹
+    blogger_name = scraper.blogger_name or args.source_name or "unknown"
+    safe_blogger_name = _sanitize_filename(blogger_name)
+    
+    # 创建博主文件夹（如果不存在）
+    blogger_dir = output_root / safe_blogger_name
+    blogger_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 移动 Excel 文件到博主文件夹
+    if scraper.excel_file and os.path.exists(scraper.excel_file):
+        excel_filename = os.path.basename(scraper.excel_file)
+        target_excel = blogger_dir / excel_filename
+        
+        # 如果文件已存在，添加时间戳避免覆盖
+        if target_excel.exists():
+            time_str = datetime.now().strftime("%H%M%S")
+            name_parts = excel_filename.rsplit('.', 1)
+            new_filename = f"{name_parts[0]}_{time_str}.{name_parts[1]}"
+            target_excel = blogger_dir / new_filename
+        
+        import shutil
+        shutil.move(scraper.excel_file, target_excel)
+        print(f"✓ Excel 已移动到: {target_excel}")
+    
+    # 清理临时目录
+    import shutil
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
     return {
         "posts": posts,
-        "outputDir": str(run_dir),
-        "sourceName": args.source_name or args.url,
+        "outputDir": str(blogger_dir),
+        "bloggerName": blogger_name,
+        "sourceName": args.source_name or blogger_name or args.url,
         "skippedCount": len(existing_note_ids),
     }
 
