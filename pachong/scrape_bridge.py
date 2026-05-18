@@ -9,6 +9,7 @@ note folders back into JSON for the frontend.
 import argparse
 import contextlib
 import json
+import os
 import re
 import sys
 from dataclasses import asdict
