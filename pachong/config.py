@@ -8,14 +8,14 @@
 # 目标博主主页URL
 PROFILE_URL = "https://www.xiaohongshu.com/user/profile/592d9ac450c4b433caad6a47?xsec_token=YB1-rCN463o71nSBdD49nBCBtYSsLEj-7nLJ40fStpenE=&xsec_source=app_share&xhsshare=WeixinSession&appuid=5dc150c2000000000100367d&apptime=1778687019&share_id=06b0c6a087be4df48685fd4df9836016"
 
-# 输出目录
+# 输出目录 - 只保存Excel文件
 OUTPUT_DIR = "./xiaohongshu_notes"
 
 # 是否以无头模式运行浏览器（True=隐藏浏览器窗口，False=显示窗口）
 HEADLESS = False
 
-# 是否下载图片
-DOWNLOAD_IMAGES = True
+# 是否下载图片 - 设置为False，只保存Excel不下载图片
+DOWNLOAD_IMAGES = False
 
 # ==================== Cookie配置 ====================
 

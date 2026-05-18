@@ -1135,43 +1135,13 @@ class XiaoHongShuScraper:
         return stats
     
     def _save_note(self, note: NoteData, index: int) -> None:
-        """保存笔记到文件夹"""
-        folder_name = f"note_{index:03d}_{note.note_id[:8] if note.note_id else 'unknown'}"
-        folder_path = os.path.join(self.output_dir, folder_name)
-        os.makedirs(folder_path, exist_ok=True)
-
-        print(f"\n正在保存到文件夹: {folder_path}")
-
-        # 根据类型和开关决定下载内容
-        downloaded_images = []
-        downloaded_videos = []
-        if note.is_video:
-            # 视频帖子：下载视频
-            if note.videos:
-                print(f"  检测到视频帖子，视频地址: {note.videos[0][:80]}...")
-                # 同时保存视频链接到文本文件
-                video_links = "\n".join(note.videos)
-                self._write_file(os.path.join(folder_path, "video_links.txt"), video_links)
-                print(f"  ✓ 保存: video_links.txt ({len(note.videos)}个视频链接)")
-                # 下载视频
-                if self.download_images:  # 使用相同的开关控制视频下载
-                    downloaded_videos = self._download_videos(note.videos, folder_path)
-                else:
-                    print(f"  跳过视频下载（download_images=False）")
-            else:
-                print(f"  检测到视频帖子，但未提取到视频地址")
-        else:
-            # 图片帖子：根据开关决定是否下载图片
-            if self.download_images:
-                downloaded_images = self._download_images(note.images, folder_path)
-            else:
-                print(f"  跳过图片下载（download_images=False）")
-
-        # 生成并保存Markdown
-        markdown = self._generate_markdown(note, downloaded_images)
-        self._write_file(os.path.join(folder_path, "article.md"), markdown)
-        print(f"  ✓ 保存: article.md")
-        print(f"✓ 笔记保存完成")
+        """保存笔记信息（仅更新Excel，不创建文件夹）"""
+        # 只保存到Excel，不创建文件夹和下载图片
+        print(f"\n笔记信息已保存到Excel: {note.title[:50] if note.title else '无标题'}...")
+        print(f"  - 图片数量: {len(note.images)}")
+        print(f"  - 内容长度: {len(note.content)} 字符")
+        print(f"  - 点赞: {note.likes} | 收藏: {note.collects} | 评论: {note.comments}")
+        print(f"✓ 笔记处理完成（仅Excel）")
     
     def _download_images(self, image_urls: List[str], folder_path: str) -> List[str]:
         """下载图片"""
