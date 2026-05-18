@@ -257,13 +257,23 @@ export default function Generator({ userId, username, library, onDataChange }) {
       return Math.min(fallback, images.length)
     }
 
+    console.log('[解析AI响应] 原始文本长度:', text.length)
+    console.log('[解析AI响应] 前200字符:', text.substring(0, 200))
+
     // 尝试解析 JSON 格式
     try {
       // 尝试匹配 JSON 数组
       const jsonMatch = text.match(/\[[\s\S]*\]/)
       if (jsonMatch) {
+        console.log('[解析AI响应] 找到JSON数组匹配')
         const parsed = JSON.parse(jsonMatch[0])
-        if (Array.isArray(parsed) && parsed.length >= 4) {
+        console.log('[解析AI响应] JSON解析成功，数组长度:', parsed.length)
+        if (Array.isArray(parsed)) {
+          // 如果数组长度不足4，复制最后一组直到有4组
+          while (parsed.length < 4) {
+            const lastItem = parsed[parsed.length - 1] || { title: '标题', content: '内容' }
+            parsed.push({ ...lastItem, title: lastItem.title + ` (版本${parsed.length + 1})` })
+          }
           return parsed.slice(0, 4).map((item, i) => ({
             title: item.title || `标题 ${i + 1}`,
             content: item.content || '',
@@ -276,7 +286,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         }
       }
     } catch (e) {
-      // JSON 解析失败
+      console.error('[解析AI响应] JSON解析失败:', e.message)
     }
 
     // 文本解析：尝试按组分割提取4组
