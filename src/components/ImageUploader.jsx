@@ -1,30 +1,71 @@
 import { useState } from 'react'
 
+const MAX_IMAGES = 50
+const MAX_IMAGE_EDGE = 1280
+const IMAGE_QUALITY = 0.84
+
 export default function ImageUploader({ images, onImagesChange }) {
   const [dragOver, setDragOver] = useState(false)
 
+  const readFileAsDataUrl = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve(e.target.result)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const prepareImage = async (file) => {
+    const originalDataUrl = await readFileAsDataUrl(file)
+
+    return new Promise((resolve) => {
+      const image = new Image()
+      image.onload = () => {
+        const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(image.width, image.height))
+        const width = Math.max(1, Math.round(image.width * scale))
+        const height = Math.max(1, Math.round(image.height * scale))
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')
+
+        canvas.width = width
+        canvas.height = height
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, width, height)
+        ctx.drawImage(image, 0, 0, width, height)
+
+        const dataUrl = canvas.toDataURL('image/jpeg', IMAGE_QUALITY)
+        resolve({
+          id: Date.now() + Math.random(),
+          url: dataUrl,
+          name: file.name,
+          mimeType: 'image/jpeg',
+          base64: dataUrl.split(',')[1]
+        })
+      }
+      image.onerror = () => {
+        resolve({
+          id: Date.now() + Math.random(),
+          url: originalDataUrl,
+          name: file.name,
+          mimeType: file.type || 'image/jpeg',
+          base64: originalDataUrl.split(',')[1]
+        })
+      }
+      image.src = originalDataUrl
+    })
+  }
+
   const handleFiles = (files) => {
-    const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'))
+    const remaining = MAX_IMAGES - images.length
+    const imageFiles = Array.from(files)
+      .filter(file => file.type.startsWith('image/'))
+      .slice(0, remaining)
     if (imageFiles.length === 0) return
 
-    const promises = imageFiles.map(file => {
-      return new Promise((resolve) => {
-        const reader = new FileReader()
-        reader.onload = (e) => {
-          resolve({
-            id: Date.now() + Math.random(),
-            url: e.target.result,
-            name: file.name,
-            mimeType: file.type || 'image/jpeg',
-            base64: e.target.result.split(',')[1]
-          })
-        }
-        reader.readAsDataURL(file)
-      })
-    })
+    const promises = imageFiles.map(prepareImage)
 
     Promise.all(promises).then(newImages => {
-      onImagesChange([...images, ...newImages].slice(0, 50))
+      onImagesChange([...images, ...newImages].slice(0, MAX_IMAGES))
     })
   }
 
@@ -65,7 +106,7 @@ export default function ImageUploader({ images, onImagesChange }) {
       )}
 
       {/* 上传区域 */}
-      {images.length < 50 && (
+      {images.length < MAX_IMAGES && (
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
@@ -89,7 +130,7 @@ export default function ImageUploader({ images, onImagesChange }) {
               </svg>
             </div>
             <p className="text-gray-600 font-medium">点击或拖拽上传图片</p>
-            <p className="text-gray-400 text-sm mt-1">支持 JPG、PNG，最多 {50 - images.length} 张</p>
+            <p className="text-gray-400 text-sm mt-1">支持 JPG、PNG，最多 {MAX_IMAGES - images.length} 张</p>
           </label>
         </div>
       )}

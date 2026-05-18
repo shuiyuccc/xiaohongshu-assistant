@@ -459,7 +459,14 @@ class XiaoHongShuScraper:
 
     def _extract_blogger_name(self) -> str:
         """从博主主页提取博主昵称，用于命名Excel文件"""
+        # 更精确的选择器，优先匹配主页头部的大标题
         selectors = [
+            # 主页头部博主名
+            "h1[class*='user-name']",
+            "h1[class*='nickname']",
+            ".user-info-container h1",
+            "[class*='user-info'] h1",
+            # 其他可能的选择器
             ".user-nickname .user-name",
             ".user-name",
             "[class*='user-nickname'] [class*='user-name']",
@@ -473,11 +480,26 @@ class XiaoHongShuScraper:
                 elem = self.page.query_selector(selector)
                 if elem:
                     name = elem.inner_text().strip()
-                    if name:
-                        return " ".join(name.split())
-            except Exception:
+                    if name and len(name) > 0 and len(name) < 50:  # 过滤过长文本
+                        clean_name = " ".join(name.split())
+                        print(f"[博主名提取] 使用选择器 '{selector}' 提取到: {clean_name}")
+                        return clean_name
+            except Exception as e:
                 continue
 
+        # 备用方案：从 URL 中提取用户ID
+        try:
+            current_url = self.page.url
+            # 匹配 /user/profile/xxx 或 /xxx 格式
+            user_match = re.search(r'/user/profile/([^/?]+)', current_url)
+            if user_match:
+                user_id = user_match.group(1)
+                print(f"[博主名提取] 从 URL 提取到用户ID: {user_id}")
+                return f"user_{user_id[:8]}"
+        except Exception as e:
+            pass
+
+        print("⚠️ [博主名提取] 所有选择器都未找到博主名")
         return ""
 
     def _configure_excel_for_blogger(self) -> None:
