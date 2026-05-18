@@ -1,11 +1,10 @@
-import { useState, useMemo } from 'react'
-import ImageUploader from '../components/ImageUploader'
+import { useEffect, useState, useMemo } from 'react'
 import OutputCard from '../components/OutputCard'
 import { generateContent, detectTheme } from '../services/ai'
-import { addToHistory } from '../services/api'
+import { addToHistory, getExcelBloggerPosts, getExcelBloggers } from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
-  const [images, setImages] = useState([])
+  const [images] = useState([])
   const [keywords, setKeywords] = useState('')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState([])
@@ -15,6 +14,8 @@ export default function Generator({ userId, username, library, onDataChange }) {
   // 参考来源选择
   const [referenceSource, setReferenceSource] = useState('influencer') // 'influencer' | 'viral'
   const [selectedInfluencer, setSelectedInfluencer] = useState('')
+  const [excelBloggers, setExcelBloggers] = useState([])
+  const [excelLoading, setExcelLoading] = useState(false)
   
   // 热门帖子筛选条件
   const [viralTimeRange, setViralTimeRange] = useState('6months') // '1month' | '3months' | '6months' | '1year' | 'all'
@@ -36,6 +37,63 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const influencerList = useMemo(() => {
     return Object.keys(influencers)
   }, [influencers])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadExcelBloggers() {
+      setExcelLoading(true)
+      try {
+        const data = await getExcelBloggers()
+        if (!cancelled) {
+          setExcelBloggers(Array.isArray(data.bloggers) ? data.bloggers : [])
+        }
+      } catch (err) {
+        console.error('读取爬虫 Excel 博主失败:', err)
+      } finally {
+        if (!cancelled) setExcelLoading(false)
+      }
+    }
+
+    loadExcelBloggers()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const influencerOptions = useMemo(() => {
+    const options = excelBloggers.map(blogger => ({
+      id: `excel:${blogger.name}`,
+      name: blogger.name,
+      count: blogger.postCount || 0,
+      type: 'excel',
+      sampleTitles: blogger.sampleTitles || []
+    }))
+
+    const excelNames = new Set(excelBloggers.map(blogger => blogger.name))
+    influencerList
+      .filter(name => !excelNames.has(name))
+      .forEach(name => {
+        options.push({
+          id: `library:${name}`,
+          name,
+          count: influencers[name]?.length || 0,
+          type: 'library'
+        })
+      })
+
+    return options
+  }, [excelBloggers, influencerList, influencers])
+
+  const selectedInfluencerOption = useMemo(() => {
+    return influencerOptions.find(option => option.id === selectedInfluencer)
+  }, [influencerOptions, selectedInfluencer])
+
+  useEffect(() => {
+    if (influencerOptions.length > 0 && !selectedInfluencerOption) {
+      setSelectedInfluencer(influencerOptions[0].id)
+    }
+  }, [influencerOptions, selectedInfluencerOption])
   
   // 主题选项
   const themeOptions = [
@@ -89,10 +147,6 @@ export default function Generator({ userId, username, library, onDataChange }) {
   }
 
   const handleGenerate = async () => {
-    if (images.length < 4) {
-      setError('请至少上传 4 张图片')
-      return
-    }
     if (!keywords.trim()) {
       setError('请输入关键词')
       return
@@ -102,19 +156,34 @@ export default function Generator({ userId, username, library, onDataChange }) {
     setLoading(true)
 
     try {
-      // 先识别主题
+      // 纯文字测试模式下没有图片时跳过主题识别
       let theme = '婚礼跟拍'
-      try {
-        theme = await detectTheme(images)
-        setDetectedTheme(theme)
-      } catch (e) {
-        console.log('主题识别失败，使用默认')
+      if (images.length > 0) {
+        try {
+          theme = await detectTheme(images)
+          setDetectedTheme(theme)
+        } catch (e) {
+          console.log('主题识别失败，使用默认')
+        }
       }
 
       // 根据选择的参考来源筛选素材库
       let filteredLibrary = []
       if (referenceSource === 'influencer' && selectedInfluencer) {
-        filteredLibrary = library.filter(item => item.source === selectedInfluencer && item.type === 'influencer')
+        const [sourceType, ...nameParts] = selectedInfluencer.split(':')
+        const influencerName = nameParts.join(':')
+
+        if (sourceType === 'excel') {
+          const data = await getExcelBloggerPosts(influencerName, 'all')
+          filteredLibrary = (data.posts || []).map(post => ({
+            type: 'influencer',
+            source: influencerName,
+            originalTitle: post.title,
+            originalContent: post.content
+          }))
+        } else {
+          filteredLibrary = library.filter(item => item.source === influencerName && item.type === 'influencer')
+        }
       } else if (referenceSource === 'viral') {
         // 热门帖子：根据时间范围和主题筛选
         filteredLibrary = filterViralPosts(library, viralTimeRange, viralTheme)
@@ -156,7 +225,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
             title: item.title || `标题 ${i + 1}`,
             content: item.content || '',
             coverIndex: item.coverIndex || (i + 1),
-            angle: item.angle || '用户视角',
+            angle: item.angle || '模仿风格',
             coverReason: item.coverReason || '',
             reason: item.reason || '综合评估',
             index: i
@@ -290,7 +359,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
     if (contentMatch) content = contentMatch[1].trim()
 
     // 提取角度
-    let angle = '用户视角'
+    let angle = '模仿风格'
     const angleMatch = section.match(/角度[：:]\s*([^\n]+)/i)
     if (angleMatch) angle = angleMatch[1].trim()
 
@@ -318,7 +387,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
     <div className="max-w-2xl mx-auto py-8 px-4">
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">生成内容</h2>
-        <p className="text-gray-500">上传图片，输入关键词，生成4组标题文案</p>
+        <p className="text-gray-500">输入关键词，选择参考博主，生成4组标题文案</p>
       </div>
 
       {/* 设置面板 */}
@@ -330,13 +399,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         )}
 
         <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">1. 上传图片（4-9张）</label>
-          <ImageUploader images={images} onImagesChange={setImages} />
-          <p className="text-gray-400 text-sm mt-2">提示：上传4张以上，AI会从中选择4张作为不同组合的封面</p>
-        </div>
-
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">2. 输入关键词</label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">1. 输入关键词</label>
           <input
             type="text"
             value={keywords}
@@ -349,22 +412,24 @@ export default function Generator({ userId, username, library, onDataChange }) {
 
         {/* 参考来源选择 */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-3">3. 选择文案参考来源</label>
+          <label className="block text-sm font-medium text-gray-700 mb-3">2. 选择文案参考来源</label>
           
           {/* 参考来源类型选择 */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <button
               onClick={() => setReferenceSource('influencer')}
-              disabled={influencerList.length === 0}
+              disabled={influencerOptions.length === 0}
               className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-all ${
                 referenceSource === 'influencer'
                   ? 'border-pink-500 bg-pink-50 text-pink-700'
                   : 'border-gray-200 hover:border-pink-300 text-gray-600'
-              } ${influencerList.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+              } ${influencerOptions.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <div className="text-lg mb-1">👤</div>
               <div>参考博主</div>
-              <div className="text-xs opacity-70 mt-1">({influencerList.length}位)</div>
+              <div className="text-xs opacity-70 mt-1">
+                {excelLoading ? '读取中...' : `(${influencerOptions.length}位)`}
+              </div>
             </button>
             
             <button
@@ -383,7 +448,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
           </div>
 
           {/* 选择具体博主 */}
-          {referenceSource === 'influencer' && influencerList.length > 0 && (
+          {referenceSource === 'influencer' && influencerOptions.length > 0 && (
             <div className="mt-4 p-4 bg-gray-50 rounded-xl">
               <label className="block text-sm font-medium text-gray-700 mb-2">选择要参考的博主</label>
               <select
@@ -392,18 +457,31 @@ export default function Generator({ userId, username, library, onDataChange }) {
                 className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all bg-white"
               >
                 <option value="">请选择博主...</option>
-                {influencerList.map(source => (
-                  <option key={source} value={source}>
-                    {source} ({influencers[source].length} 条素材)
+                {influencerOptions.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.name} ({option.count} 条{option.type === 'excel' ? 'Excel笔记' : '素材'})
                   </option>
                 ))}
               </select>
               
-              {selectedInfluencer && influencers[selectedInfluencer] && (
+              {selectedInfluencerOption?.type === 'excel' && (
+                <div className="mt-3 text-sm text-gray-600">
+                  <p className="font-medium text-gray-700 mb-1">将参考该博主 Excel 中的标题和正文：</p>
+                  <div className="space-y-1">
+                    {selectedInfluencerOption.sampleTitles.slice(0, 3).map((title, idx) => (
+                      <div key={idx} className="text-xs text-gray-500 bg-white p-2 rounded-lg">
+                        {title}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedInfluencerOption?.type === 'library' && influencers[selectedInfluencerOption.name] && (
                 <div className="mt-3 text-sm text-gray-600">
                   <p className="font-medium text-gray-700 mb-1">该博主风格特征：</p>
                   <div className="space-y-1">
-                    {influencers[selectedInfluencer].slice(0, 2).map((item, idx) => (
+                    {influencers[selectedInfluencerOption.name].slice(0, 2).map((item, idx) => (
                       <div key={idx} className="text-xs text-gray-500 bg-white p-2 rounded-lg">
                         {item.titleStyle && <span className="block">标题：{item.titleStyle.substring(0, 50)}...</span>}
                         {item.contentStyle && <span className="block">文案：{item.contentStyle.substring(0, 50)}...</span>}
@@ -484,10 +562,10 @@ export default function Generator({ userId, username, library, onDataChange }) {
           )}
 
           {/* 空状态提示 */}
-          {library.length === 0 && (
+          {library.length === 0 && excelBloggers.length === 0 && (
             <div className="mt-4 p-4 bg-gray-50 rounded-xl text-sm text-gray-500">
               <p>💡 提示：请先前往「素材库」添加素材，即可使用参考来源功能</p>
-              <p className="mt-1 text-xs">支持爬取博主主页或搜索热门帖子</p>
+              <p className="mt-1 text-xs">也可以先运行爬虫，系统会自动读取 pachong 文件夹下的博主 Excel</p>
             </div>
           )}
         </div>

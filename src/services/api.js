@@ -65,11 +65,24 @@ export async function getQrLoginStatus() {
   return request('/xhs/qr-login/status')
 }
 
-export async function scrapeInfluencer(url, count) {
+// 获取指定博主已存在的 note_id 列表（用于增量爬取）
+export async function getExistingNoteIds(userId, source) {
+  return request(`/xhs/existing-notes?userId=${encodeURIComponent(userId)}&source=${encodeURIComponent(source)}`)
+}
+
+export async function scrapeInfluencer(url, count, existingNoteIds = []) {
   return request('/xhs/scrape', {
     method: 'POST',
-    body: JSON.stringify({ url, count })
+    body: JSON.stringify({ url, count, existingNoteIds })
   })
+}
+
+export async function getExcelBloggers() {
+  return request('/xhs/excel-bloggers')
+}
+
+export async function getExcelBloggerPosts(name, limit = 30) {
+  return request(`/xhs/excel-bloggers/${encodeURIComponent(name)}/posts?limit=${limit}`)
 }
 
 export async function searchViral(keyword, count) {

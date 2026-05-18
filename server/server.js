@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3001
 const DB_PATH = path.join(__dirname, 'data.db')
 const PACHONG_DIR = path.join(ROOT_DIR, 'pachong')
 const PACHONG_BRIDGE = path.join(PACHONG_DIR, 'scrape_bridge.py')
+const EXCEL_READER = path.join(PACHONG_DIR, 'excel_reader.py')
 const XHS_OUTPUT_DIR = path.join(PACHONG_DIR, 'xiaohongshu_notes')
 const PYTHON_BIN = process.env.PYTHON_BIN || process.env.PYTHON || 'python'
 
@@ -52,6 +53,7 @@ async function initDB() {
       type TEXT NOT NULL,
       source TEXT,
       theme TEXT,
+      note_id TEXT,
       original_cover TEXT,
       original_title TEXT,
       original_content TEXT,
@@ -128,23 +130,25 @@ app.get('/api/users/:name/data', (req, res) => {
   const library = libraryResult.length > 0
     ? libraryResult[0].values.map(row => ({
         id: row[0],
+        userId: row[1],
         type: row[2],
         source: row[3],
         theme: row[4],
-        originalCover: row[5],
-        originalTitle: row[6],
-        originalContent: row[7],
-        publishDate: row[8],
-        likes: row[9],
-        collects: row[10],
-        comments: row[11],
-        coverAnalysis: row[12],
-        titleAnalysis: row[13],
-        contentAnalysis: row[14],
-        titleStyle: row[15],
-        contentStyle: row[16],
-        viralReason: row[17],
-        createdAt: row[18]
+        noteId: row[5],
+        originalCover: row[6],
+        originalTitle: row[7],
+        originalContent: row[8],
+        publishDate: row[9],
+        likes: row[10],
+        collects: row[11],
+        comments: row[12],
+        coverAnalysis: row[13],
+        titleAnalysis: row[14],
+        contentAnalysis: row[15],
+        titleStyle: row[16],
+        contentStyle: row[17],
+        viralReason: row[18],
+        createdAt: row[19]
       }))
     : []
 
@@ -170,14 +174,15 @@ app.post('/api/library', (req, res) => {
   const id = Date.now().toString()
 
   db.run(`
-    INSERT INTO library (id, user_id, type, source, theme, original_cover, original_title, original_content, publish_date, likes, collects, comments, cover_analysis, title_analysis, content_analysis, title_style, content_style, viral_reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO library (id, user_id, type, source, theme, note_id, original_cover, original_title, original_content, publish_date, likes, collects, comments, cover_analysis, title_analysis, content_analysis, title_style, content_style, viral_reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     id,
     userId,
     item.type || 'influencer',
     item.source || '',
     item.theme || '',
+    item.noteId || '',
     item.originalCover || '',
     item.originalTitle || '',
     item.originalContent || '',
@@ -269,7 +274,65 @@ function getErrorMessage(stdout, stderr) {
   return lines.at(-1) || '爬虫执行失败'
 }
 
-function runPythonXhsScraper({ url, count, sourceName = '' }) {
+function runPythonJson(scriptPath, args, timeoutMs = 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(scriptPath)) {
+      reject(new Error(`未找到 Python 脚本: ${scriptPath}`))
+      return
+    }
+
+    const child = spawn(PYTHON_BIN, ['-X', 'utf8', scriptPath, ...args], {
+      cwd: PACHONG_DIR,
+      env: {
+        ...process.env,
+        PYTHONUTF8: '1',
+        PYTHONIOENCODING: 'utf-8'
+      }
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      reject(new Error('Python 脚本执行超时'))
+    }, timeoutMs)
+
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8')
+    })
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8')
+    })
+
+    child.on('error', err => {
+      clearTimeout(timeout)
+      reject(new Error(`无法启动 Python: ${err.message}`))
+    })
+
+    child.on('close', code => {
+      clearTimeout(timeout)
+
+      if (code !== 0) {
+        reject(new Error(getErrorMessage(stdout, stderr)))
+        return
+      }
+
+      try {
+        const parsed = JSON.parse(stdout)
+        if (parsed.error) {
+          reject(new Error(parsed.error))
+          return
+        }
+        resolve(parsed)
+      } catch (err) {
+        reject(new Error(`Python 结果解析失败: ${err.message}`))
+      }
+    })
+  })
+}
+
+function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = [] }) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(PACHONG_BRIDGE)) {
       reject(new Error(`未找到 Python 爬虫桥接脚本: ${PACHONG_BRIDGE}`))
@@ -294,13 +357,19 @@ function runPythonXhsScraper({ url, count, sourceName = '' }) {
       '180'
     ]
 
+    // 如果有已存在的 note_id，通过环境变量传递
+    const env = {
+      ...process.env,
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8'
+    }
+    if (existingNoteIds.length > 0) {
+      env.EXISTING_NOTE_IDS = existingNoteIds.join(',')
+    }
+
     const child = spawn(PYTHON_BIN, args, {
       cwd: PACHONG_DIR,
-      env: {
-        ...process.env,
-        PYTHONUTF8: '1',
-        PYTHONIOENCODING: 'utf-8'
-      }
+      env
     })
 
     let stdout = ''
@@ -349,6 +418,48 @@ function runPythonXhsScraper({ url, count, sourceName = '' }) {
     })
   })
 }
+
+// 读取 pachong/xiaohongshu_notes 下的博主 Excel 列表
+app.get('/api/xhs/excel-bloggers', async (req, res) => {
+  try {
+    const result = await runPythonJson(EXCEL_READER, [
+      '--mode',
+      'list',
+      '--output-dir',
+      XHS_OUTPUT_DIR
+    ])
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 读取指定博主 Excel 中的标题和正文，供内容生成参考
+app.get('/api/xhs/excel-bloggers/:name/posts', async (req, res) => {
+  const { name } = req.params
+  const readAll = req.query.limit === 'all'
+  const limit = readAll ? null : normalizeCount(req.query.limit, 30)
+
+  try {
+    const args = [
+      '--mode',
+      'read',
+      '--output-dir',
+      XHS_OUTPUT_DIR,
+      '--name',
+      name
+    ]
+
+    if (!readAll) {
+      args.push('--limit', String(limit))
+    }
+
+    const result = await runPythonJson(EXCEL_READER, args)
+    res.json(result)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // 检查登录态
 app.get('/api/xhs/session', (req, res) => {
@@ -444,14 +555,33 @@ app.get('/api/xhs/qr-login/status', async (req, res) => {
   }
 })
 
+// 获取指定博主已存在的 note_id 列表（用于增量爬取）
+app.get('/api/xhs/existing-notes', (req, res) => {
+  const { userId, source } = req.query
+  if (!userId || !source) {
+    return res.status(400).json({ error: '缺少 userId 或 source 参数' })
+  }
+
+  try {
+    const result = db.exec(
+      'SELECT note_id FROM library WHERE user_id = ? AND source = ? AND note_id IS NOT NULL AND note_id != ""',
+      [userId, source]
+    )
+    const noteIds = result.length > 0 ? result[0].values.map(row => row[0]) : []
+    res.json({ noteIds })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // 爬取博主帖子：使用 pachong 目录里的 Python 爬虫逻辑
 app.post('/api/xhs/scrape', async (req, res) => {
-  const { url, count = 10 } = req.body
+  const { url, count = 10, existingNoteIds = [] } = req.body
 
   if (!url) return res.status(400).json({ error: '缺少 url 参数' })
 
   try {
-    const result = await runPythonXhsScraper({ url, count, sourceName: url })
+    const result = await runPythonXhsScraper({ url, count, sourceName: url, existingNoteIds })
     res.json(result)
   } catch (err) {
     res.status(500).json({ error: err.message })

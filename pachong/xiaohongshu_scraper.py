@@ -50,12 +50,14 @@ class NoteData:
 class XiaoHongShuScraper:
     """小红书爬虫类"""
     
-    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None):
+    def __init__(self, headless: bool = None, output_dir: str = None, download_images: bool = None, max_notes: int = None, existing_note_ids: Set[str] = None):
         # 从配置文件读取参数，参数传入优先于配置文件
         self.headless = headless if headless is not None else config.HEADLESS
         self.output_dir = output_dir if output_dir is not None else config.OUTPUT_DIR
         self.download_images = download_images if download_images is not None else config.DOWNLOAD_IMAGES
         self.max_notes = max_notes
+        self.existing_note_ids = existing_note_ids or set()  # 已存在的 note_id 集合（用于增量爬取）
+        self.new_notes_count = 0  # 已处理的新笔记数量
 
         self.browser = None
         self.context = None
@@ -572,48 +574,104 @@ class XiaoHongShuScraper:
             return None
     
     def _scroll_and_collect_notes(self, profile_url: str) -> List[Dict]:
-        """滚动页面并收集所有笔记信息"""
-        print("\n开始滚动收集所有笔记信息...")
+        """滚动页面并收集所有笔记信息（旧方法，保留兼容）"""
+        return self._scroll_and_collect_notes_incremental(profile_url)
+
+    def _scroll_and_collect_notes_incremental(self, profile_url: str) -> List[Dict]:
+        """滚动页面并收集笔记信息（支持增量爬取）
+        
+        如果设置了 existing_note_ids，则会：
+        1. 跳过已存在的 note_id
+        2. 只收集新的笔记，直到达到 max_notes 数量
+        """
+        is_incremental = len(self.existing_note_ids) > 0
+        if is_incremental:
+            print(f"\n[增量爬取] 开始滚动收集新笔记（目标：{self.max_notes} 条新笔记）...")
+            print(f"[增量爬取] 已存在 {len(self.existing_note_ids)} 条笔记，将自动跳过")
+        else:
+            print("\n开始滚动收集所有笔记信息...")
         
         all_notes_info = []
         seen_titles = set()
+        seen_note_ids = set()
         max_scroll_attempts = config.SCROLL_MAX_ATTEMPTS
         scroll_pause_time = config.SCROLL_PAUSE_TIME
         no_new_count = 0
+        skipped_count = 0
         
         for attempt in range(max_scroll_attempts):
+            # 检查是否已收集足够的新笔记
+            if self.max_notes and len(all_notes_info) >= self.max_notes:
+                print(f"✓ 已收集足够的新笔记（{len(all_notes_info)} 条），停止滚动")
+                break
+            
             # 获取当前页面所有笔记元素
             note_elements = self._get_all_note_elements()
             current_new_count = 0
+            current_skipped = 0
             
             for elem in note_elements:
                 info = self._get_note_info_from_element(elem)
-                if info and info['title'] not in seen_titles:
-                    seen_titles.add(info['title'])
-                    all_notes_info.append(info)
-                    current_new_count += 1
+                if not info:
+                    continue
                     
-                    # 添加到Excel（检查重复）
-                    self._add_note_to_excel(
-                        len(all_notes_info), 
-                        info['title'], 
-                        "",  # 内容稍后获取
-                        "",  # 点赞数稍后获取
-                        "",  # 收藏数稍后获取
-                        "",  # 评论数稍后获取
-                        info['note_id'], 
-                        info['url']
-                    )
+                # 检查标题是否已见过
+                if info['title'] in seen_titles:
+                    continue
+                seen_titles.add(info['title'])
+                
+                # 检查 note_id 是否已存在（增量爬取逻辑）
+                note_id = info.get('note_id', '')
+                if note_id:
+                    # 如果已经在这个批次中见过，跳过
+                    if note_id in seen_note_ids:
+                        continue
+                    seen_note_ids.add(note_id)
+                    
+                    # 如果已在数据库中存在，跳过
+                    if note_id in self.existing_note_ids:
+                        skipped_count += 1
+                        current_skipped += 1
+                        continue
+                
+                # 是新笔记，添加到列表
+                all_notes_info.append(info)
+                current_new_count += 1
+                
+                # 添加到Excel（检查重复）
+                self._add_note_to_excel(
+                    len(all_notes_info), 
+                    info['title'], 
+                    "",  # 内容稍后获取
+                    "",  # 点赞数稍后获取
+                    "",  # 收藏数稍后获取
+                    "",  # 评论数稍后获取
+                    info['note_id'], 
+                    info['url']
+                )
+                
+                # 检查是否已收集足够
+                if self.max_notes and len(all_notes_info) >= self.max_notes:
+                    break
             
             # 每10次滚动输出进度
-            if (attempt + 1) % 10 == 0 or current_new_count > 0:
-                print(f"  第 {attempt + 1} 次滚动，当前共收集 {len(all_notes_info)} 篇笔记（本次新增 {current_new_count} 篇）")
+            if (attempt + 1) % 10 == 0 or current_new_count > 0 or current_skipped > 0:
+                progress_msg = f"  第 {attempt + 1} 次滚动，新笔记：{len(all_notes_info)} 条"
+                if is_incremental:
+                    progress_msg += f"（本次新增 {current_new_count} 条，跳过 {current_skipped} 条已存在）"
+                    progress_msg += f"，累计跳过：{skipped_count} 条"
+                else:
+                    progress_msg += f"（本次新增 {current_new_count} 条）"
+                print(progress_msg)
             
             # 检查是否还有新内容
-            if current_new_count == 0:
+            if current_new_count == 0 and current_skipped == 0:
                 no_new_count += 1
                 if no_new_count >= config.SCROLL_NO_CHANGE_THRESHOLD:
-                    print(f"✓ 滚动收集完成，共 {len(all_notes_info)} 篇笔记")
+                    if is_incremental:
+                        print(f"✓ 滚动收集完成，共收集 {len(all_notes_info)} 条新笔记，跳过 {skipped_count} 条已存在")
+                    else:
+                        print(f"✓ 滚动收集完成，共 {len(all_notes_info)} 篇笔记")
                     break
             else:
                 no_new_count = 0
@@ -641,17 +699,14 @@ class XiaoHongShuScraper:
         # 初始化Excel
         self._init_excel()
         
-        # 滚动收集所有笔记信息到Excel
-        notes_info = self._scroll_and_collect_notes(profile_url)
+        # 滚动收集所有笔记信息到Excel（带增量爬取逻辑）
+        notes_info = self._scroll_and_collect_notes_incremental(profile_url)
         
         if not notes_info:
-            print("⚠️ 未收集到任何笔记信息")
+            print("⚠️ 未收集到任何新笔记信息（可能都已存在）")
             return all_notes
 
-        if self.max_notes and self.max_notes > 0:
-            notes_info = notes_info[:self.max_notes]
-        
-        print(f"\n✓ 共收集到 {len(notes_info)} 篇笔记，开始处理...")
+        print(f"\n✓ 共收集到 {len(notes_info)} 篇新笔记，开始处理...")
         
         # 重新滚动到顶部
         print("滚动回顶部，开始处理...")

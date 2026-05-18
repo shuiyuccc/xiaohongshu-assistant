@@ -116,11 +116,18 @@ def run(args):
     run_dir.mkdir(parents=True, exist_ok=True)
     _apply_runtime_config(args, run_dir)
 
+    # 从环境变量读取已存在的 note_id 列表
+    existing_note_ids = set()
+    if os.environ.get("EXISTING_NOTE_IDS"):
+        existing_note_ids = set(os.environ["EXISTING_NOTE_IDS"].split(","))
+        print(f"[增量爬取] 已存在 {len(existing_note_ids)} 条笔记，将自动跳过")
+
     scraper = XiaoHongShuScraper(
         headless=config.HEADLESS,
         output_dir=str(run_dir),
         download_images=config.DOWNLOAD_IMAGES,
         max_notes=args.count,
+        existing_note_ids=existing_note_ids,
     )
 
     notes = scraper.get_all_notes(args.url) or []
@@ -137,6 +144,7 @@ def run(args):
         "posts": posts,
         "outputDir": str(run_dir),
         "sourceName": args.source_name or args.url,
+        "skippedCount": len(existing_note_ids),
     }
 
 

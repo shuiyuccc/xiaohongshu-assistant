@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { addToLibrary as addToLibraryAPI, removeFromLibrary as removeFromLibraryAPI, getXhsSession, startQrLogin, getQrLoginStatus, scrapeInfluencer as scrapeInfluencerAPI, searchViral } from '../services/api'
+import { addToLibrary as addToLibraryAPI, removeFromLibrary as removeFromLibraryAPI, getXhsSession, startQrLogin, getQrLoginStatus, scrapeInfluencer as scrapeInfluencerAPI, searchViral, getExistingNoteIds } from '../services/api'
 import { analyzeViral } from '../services/ai'
 
 function QrModal({ onSuccess, onClose }) {
@@ -204,11 +204,30 @@ export default function Library({ userId, username, library, onDataChange }) {
     setError('')
     setResults([])
     setLoading(true)
-    setStatus('正在爬取博主主页...')
+    setStatus('正在检查已存在的笔记...')
 
     try {
-      const { posts: rawPosts, sourceName } = await scrapeInfluencerAPI(url, count)
-      if (!rawPosts || rawPosts.length === 0) throw new Error('未能爬取到帖子，请检查链接是否正确')
+      // 先获取该博主已存在的 note_id 列表（用于增量爬取）
+      let existingNoteIds = []
+      try {
+        const existingData = await getExistingNoteIds(userId, url)
+        existingNoteIds = existingData.noteIds || []
+        if (existingNoteIds.length > 0) {
+          setStatus(`发现已存在 ${existingNoteIds.length} 条笔记，将自动跳过...`)
+        }
+      } catch (e) {
+        console.log('获取已存在笔记失败，继续爬取:', e)
+      }
+
+      setStatus('正在爬取博主主页...')
+      const { posts: rawPosts, sourceName, skippedCount } = await scrapeInfluencerAPI(url, count, existingNoteIds)
+      
+      if (!rawPosts || rawPosts.length === 0) {
+        if (skippedCount > 0) {
+          throw new Error(`该博主的所有笔记都已存在（共跳过 ${skippedCount} 条），无需重复爬取`)
+        }
+        throw new Error('未能爬取到帖子，请检查链接是否正确')
+      }
 
       const bloggerName = sourceName || url
       const posts = rawPosts.map(post => ({
@@ -223,13 +242,15 @@ export default function Library({ userId, username, library, onDataChange }) {
       }))
 
       setResults(posts)
-      setStatus(`爬取完成，共 ${posts.length} 篇，正在存入素材库...`)
+      const skipMsg = skippedCount > 0 ? `（跳过 ${skippedCount} 条已存在）` : ''
+      setStatus(`爬取完成，共 ${posts.length} 篇新笔记${skipMsg}，正在存入素材库...`)
 
       for (const post of posts) {
         try {
           await addToLibraryAPI(userId, {
             type: 'influencer',
             source: bloggerName,
+            noteId: post.id || post.noteId || '',
             originalCover: post.originalCover || '',
             originalTitle: post.originalTitle || '',
             originalContent: post.originalContent || '',
@@ -247,7 +268,7 @@ export default function Library({ userId, username, library, onDataChange }) {
         }
       }
 
-      setStatus(`爬取完成，${posts.length} 条标题已列出并存入素材库`)
+      setStatus(`爬取完成，${posts.length} 条新标题已存入素材库${skipMsg}`)
       onDataChange && onDataChange()
     } catch (err) {
       setError(err.message)
@@ -374,7 +395,10 @@ export default function Library({ userId, username, library, onDataChange }) {
             />
           </div>
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">爬取帖子数量</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              爬取新帖子数量
+              <span className="text-xs text-gray-500 font-normal ml-2">（已存在的会自动跳过）</span>
+            </label>
             <input
               type="number"
               value={count}
@@ -383,6 +407,9 @@ export default function Library({ userId, username, library, onDataChange }) {
               max={50}
               className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all"
             />
+            <p className="text-gray-400 text-xs mt-2">
+              例如：博主有 300 条笔记，你已爬 100 条，填 200 即可爬取剩余全部
+            </p>
           </div>
           {error && <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-xl text-sm">{error}</div>}
           {status && <div className="mb-4 p-4 bg-blue-50 text-blue-600 rounded-xl text-sm">{status}</div>}
