@@ -37,6 +37,12 @@ function truncateText(text, maxLength) {
 
 const MAX_IMAGES_FOR_AI = 50
 const IMAGE_ANALYSIS_BATCH_SIZE = 6
+const CREATIVE_GENERATION_OPTIONS = {
+  temperature: 1.05,
+  top_p: 0.95,
+  presence_penalty: 0.55,
+  frequency_penalty: 0.45,
+}
 
 function toImageDataUrl(img) {
   if (!img) return ''
@@ -510,7 +516,7 @@ ${profileContext}
   }
 ]`
 
-  const response = await chat([{ role: 'user', content: prompt }])
+  const response = await chat([{ role: 'user', content: prompt }], CREATIVE_GENERATION_OPTIONS)
   options.onPrompt && options.onPrompt({
     step: 'content_generation',
     title: '标题文案生成',
@@ -549,7 +555,7 @@ ${bloggerStyleProfile || '暂无'}
 注意：JSON 字符串内部如需换行，必须使用 \\n 转义，不要在字符串中直接换行。
 ${isTitle ? '{"title": "新标题"}' : '{"content": "新文案"}'}`
 
-  const response = await chat([{ role: 'user', content: prompt }])
+  const response = await chat([{ role: 'user', content: prompt }], CREATIVE_GENERATION_OPTIONS)
   return {
     ...extractJsonObject(response),
     prompt,
@@ -610,7 +616,8 @@ export async function analyzeImage(imageBase64, imageUrl = '') {
     },
     body: JSON.stringify({
       model: getModel(),
-      messages
+      messages,
+      ...CREATIVE_GENERATION_OPTIONS
     })
   })
 
