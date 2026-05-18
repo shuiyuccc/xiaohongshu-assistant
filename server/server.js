@@ -23,6 +23,7 @@ const PACHONG_DIR = path.join(ROOT_DIR, 'pachong')
 const PACHONG_BRIDGE = path.join(PACHONG_DIR, 'scrape_bridge.py')
 const EXCEL_READER = path.join(PACHONG_DIR, 'excel_reader.py')
 const XHS_OUTPUT_DIR = path.join(PACHONG_DIR, 'xiaohongshu_notes')
+const GENERATION_ASSETS_DIR = path.join(__dirname, 'generation_assets')
 const PYTHON_BIN = process.env.PYTHON_BIN || process.env.PYTHON || 'python'
 const STYLE_PROFILE_JSON = 'style_profile.json'
 const STYLE_PROFILE_MD = 'style_profile.md'
@@ -30,7 +31,8 @@ const COVER_STYLE_PROFILE_JSON = 'cover_style_profile.json'
 const COVER_STYLE_PROFILE_MD = 'cover_style_profile.md'
 
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '80mb' }))
+app.use('/generation_assets', express.static(GENERATION_ASSETS_DIR))
 
 let db = null
 
@@ -125,9 +127,16 @@ async function initDB() {
       keywords TEXT,
       theme TEXT,
       results TEXT,
+      session_id TEXT,
+      summary TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `)
+  const historyMigrated = migrateTableColumns('history', {
+    session_id: 'TEXT',
+    summary: 'TEXT'
+  })
+  if (historyMigrated) saveDB()
 
   console.log('Database initialized')
 }
@@ -206,15 +215,22 @@ app.get('/api/users/:name/data', (req, res) => {
     : []
 
   // 获取历史
-  const historyResult = db.exec('SELECT * FROM history WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  const historyResult = db.exec(`
+    SELECT id, images, keywords, theme, results, created_at, session_id, summary
+    FROM history
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  `, [userId])
   const history = historyResult.length > 0
     ? historyResult[0].values.map(row => ({
         id: row[0],
-        images: row[2] ? JSON.parse(row[2]) : [],
-        keywords: row[3],
-        theme: row[4],
-        results: row[5] ? JSON.parse(row[5]) : [],
-        createdAt: row[6]
+        images: row[1] ? JSON.parse(row[1]) : [],
+        keywords: row[2],
+        theme: row[3],
+        results: row[4] ? JSON.parse(row[4]) : [],
+        createdAt: row[5],
+        sessionId: row[6] || '',
+        summary: row[7] || ''
       }))
     : []
 
@@ -269,19 +285,341 @@ app.post('/api/history', (req, res) => {
   const id = Date.now().toString()
 
   db.run(`
-    INSERT INTO history (id, user_id, images, keywords, theme, results)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO history (id, user_id, images, keywords, theme, results, session_id, summary)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     id,
     userId,
     JSON.stringify(item.images || []),
     item.keywords || '',
     item.theme || '',
-    JSON.stringify(item.results || [])
+    JSON.stringify(item.results || []),
+    item.sessionId || '',
+    item.summary || ''
   ])
 
   saveDB()
   res.json({ id, ...item })
+})
+
+function padNumber(value) {
+  return String(value).padStart(2, '0')
+}
+
+function safeFileName(name) {
+  const cleaned = String(name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim()
+  return cleaned || 'image'
+}
+
+function getImageExtensionFromMime(mimeType) {
+  if (mimeType.includes('png')) return 'png'
+  if (mimeType.includes('webp')) return 'webp'
+  if (mimeType.includes('gif')) return 'gif'
+  return 'jpg'
+}
+
+function parseImagePayload(image) {
+  const url = image?.url || ''
+  const base64 = image?.base64 || ''
+  const dataUrlMatch = url.match(/^data:([^;]+);base64,(.+)$/)
+  if (dataUrlMatch) {
+    return {
+      mimeType: dataUrlMatch[1],
+      buffer: Buffer.from(dataUrlMatch[2], 'base64')
+    }
+  }
+  if (base64) {
+    const mimeType = image?.mimeType || 'image/jpeg'
+    const cleanBase64 = base64.includes(',') ? base64.split(',').pop() : base64
+    return {
+      mimeType,
+      buffer: Buffer.from(cleanBase64, 'base64')
+    }
+  }
+  return null
+}
+
+function writeJsonFile(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+}
+
+function formatImageProfileMarkdown(profile) {
+  return `# 图片 ${profile.imageIndex || ''}
+
+- 图片ID：${profile.imageId || ''}
+- 文件名：${profile.name || ''}
+- 本地图片：${profile.imagePath || ''}
+
+## 综合描述
+${profile.description || ''}
+
+## 结构化分析
+- 主体：${profile.subject || ''}
+- 场景：${profile.scene || ''}
+- 光线：${profile.light || ''}
+- 构图：${profile.composition || ''}
+- 色彩：${profile.color || ''}
+- 情绪：${profile.emotion || ''}
+- 人物状态：${profile.people || ''}
+- 画面亮点：${profile.highlights || ''}
+- 摄影美学：${profile.aesthetics || ''}
+- 画面细节：${profile.details || ''}
+- 风险点：${profile.risks || ''}
+`
+}
+
+function formatSelectedCoversMarkdown(items) {
+  const lines = ['# 入选封面', '']
+  items.forEach((item, index) => {
+    lines.push(`## ${index + 1}. 图片 ${item.imageIndex || ''}`)
+    lines.push('')
+    lines.push(`- 图片ID：${item.imageId || ''}`)
+    lines.push(`- 入选理由：${item.selectedReason || ''}`)
+    lines.push('')
+  })
+  return lines.join('\n')
+}
+
+function formatResultsMarkdown(items) {
+  const lines = ['# 生成结果', '']
+  items.forEach((item, index) => {
+    lines.push(`## ${index + 1}. 图片 ${item.imageIndex || ''}`)
+    lines.push('')
+    lines.push(`- 图片ID：${item.imageId || ''}`)
+    lines.push(`- 图片描述文件：${item.imageProfilePath || ''}`)
+    lines.push('')
+    lines.push(`### 标题`)
+    lines.push(item.title || '')
+    lines.push('')
+    lines.push(`### 正文`)
+    lines.push(item.content || '')
+    lines.push('')
+    if (item.coverReason) {
+      lines.push(`### 选封面理由`)
+      lines.push(item.coverReason)
+      lines.push('')
+    }
+    if (item.reason) {
+      lines.push(`### 生成理由`)
+      lines.push(item.reason)
+      lines.push('')
+    }
+  })
+  return lines.join('\n')
+}
+
+function safePromptBaseName(promptItem, index) {
+  const step = safePathName(promptItem.step || 'prompt')
+  const imagePart = promptItem.imageIndex ? `_image_${padNumber(promptItem.imageIndex)}` : ''
+  return `${padNumber(index + 1)}_${step}${imagePart}`
+}
+
+function formatPromptMarkdown(promptItem) {
+  return `# ${promptItem.title || promptItem.step || 'Prompt'}
+
+- 步骤：${promptItem.step || ''}
+- 创建时间：${promptItem.createdAt || ''}
+- 图片ID：${promptItem.imageId || ''}
+- 图片编号：${promptItem.imageIndex || ''}
+- 批次：${promptItem.batchIndex || ''}
+- 相关图片：${Array.isArray(promptItem.imageIndexes) ? promptItem.imageIndexes.join(', ') : ''}
+
+## Prompt
+\`\`\`text
+${promptItem.prompt || ''}
+\`\`\`
+
+${promptItem.response ? `## AI Response
+\`\`\`text
+${promptItem.response}
+\`\`\`
+` : ''}
+${promptItem.error ? `## Error
+\`\`\`text
+${promptItem.error}
+\`\`\`
+` : ''}`
+}
+
+function writePromptFiles(promptsDir, promptItem, index) {
+  fs.mkdirSync(promptsDir, { recursive: true })
+  const baseName = safePromptBaseName(promptItem, index)
+  fs.writeFileSync(path.join(promptsDir, `${baseName}.md`), formatPromptMarkdown(promptItem), 'utf-8')
+  fs.writeFileSync(path.join(promptsDir, `${baseName}.txt`), promptItem.prompt || '', 'utf-8')
+}
+
+function findGenerationSessionDir(sessionId) {
+  const safeSessionId = safePathName(sessionId)
+  if (!fs.existsSync(GENERATION_ASSETS_DIR)) return null
+  for (const userDir of fs.readdirSync(GENERATION_ASSETS_DIR)) {
+    const candidate = path.join(GENERATION_ASSETS_DIR, userDir, safeSessionId)
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate
+    }
+  }
+  return null
+}
+
+// 保存一次生成过程的图片、图片描述、选中封面和结果文件
+app.post('/api/generation-sessions', (req, res) => {
+  try {
+    const {
+      userId = 'anonymous',
+      images = [],
+      imageProfiles = [],
+      selectedCovers = [],
+      results = [],
+      prompts = [],
+      manifest = {}
+    } = req.body || {}
+
+    const now = new Date()
+    const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_')
+    const sessionId = `session_${stamp}_${Date.now().toString(36)}`
+    const userDirName = safePathName(userId)
+    const sessionDir = path.join(GENERATION_ASSETS_DIR, userDirName, sessionId)
+    const imagesDir = path.join(sessionDir, 'images')
+    const profilesDir = path.join(sessionDir, 'image_profiles')
+    const promptsDir = path.join(sessionDir, 'prompts')
+
+    fs.mkdirSync(imagesDir, { recursive: true })
+    fs.mkdirSync(profilesDir, { recursive: true })
+    fs.mkdirSync(promptsDir, { recursive: true })
+
+    const savedImages = images.map((image, index) => {
+      const imageIndex = image.imageIndex || index + 1
+      const parsed = parseImagePayload(image)
+      const ext = parsed ? getImageExtensionFromMime(parsed.mimeType) : 'jpg'
+      const originalBaseName = safeFileName(path.parse(image.name || `image_${imageIndex}`).name)
+      const filename = `${padNumber(imageIndex)}_${originalBaseName}.${ext}`
+      const filePath = path.join(imagesDir, filename)
+      if (parsed) {
+        fs.writeFileSync(filePath, parsed.buffer)
+      }
+      return {
+        imageId: String(image.id || image.imageId || `image-${imageIndex}`),
+        imageIndex,
+        name: image.name || filename,
+        filename,
+        relativePath: path.relative(sessionDir, filePath).replace(/\\/g, '/'),
+        url: `/generation_assets/${encodeURIComponent(userDirName)}/${encodeURIComponent(sessionId)}/images/${encodeURIComponent(filename)}`
+      }
+    })
+
+    const imagePathById = new Map(savedImages.map(image => [String(image.imageId), image.relativePath]))
+    const profileFiles = imageProfiles.map((profile, index) => {
+      const imageIndex = profile.imageIndex || index + 1
+      const filename = `${padNumber(imageIndex)}.json`
+      const filePath = path.join(profilesDir, filename)
+      const payload = {
+        ...profile,
+        imageId: String(profile.imageId || `image-${imageIndex}`),
+        imageIndex,
+        imagePath: imagePathById.get(String(profile.imageId)) || ''
+      }
+      writeJsonFile(filePath, payload)
+      fs.writeFileSync(path.join(profilesDir, `${padNumber(imageIndex)}.md`), formatImageProfileMarkdown(payload), 'utf-8')
+      return {
+        imageId: payload.imageId,
+        imageIndex,
+        relativePath: path.relative(sessionDir, filePath).replace(/\\/g, '/')
+      }
+    })
+
+    const profilePathById = new Map(profileFiles.map(profile => [String(profile.imageId), profile.relativePath]))
+    const normalizedSelected = selectedCovers.map(item => ({
+      ...item,
+      imageProfilePath: profilePathById.get(String(item.imageId)) || ''
+    }))
+    const normalizedResults = results.map(item => ({
+      ...item,
+      imageProfilePath: profilePathById.get(String(item.imageId)) || ''
+    }))
+
+    const manifestPayload = {
+      sessionId,
+      userId,
+      createdAt: now.toISOString(),
+      imageCount: images.length,
+      selectedCount: selectedCovers.length,
+      resultCount: results.length,
+      ...manifest
+    }
+
+    writeJsonFile(path.join(sessionDir, 'manifest.json'), manifestPayload)
+    writeJsonFile(path.join(sessionDir, 'selected_covers.json'), normalizedSelected)
+    fs.writeFileSync(path.join(sessionDir, 'selected_covers.md'), formatSelectedCoversMarkdown(normalizedSelected), 'utf-8')
+    writeJsonFile(path.join(sessionDir, 'results.json'), normalizedResults)
+    fs.writeFileSync(path.join(sessionDir, 'results.md'), formatResultsMarkdown(normalizedResults), 'utf-8')
+    prompts.forEach((promptItem, index) => writePromptFiles(promptsDir, promptItem, index))
+
+    res.json({
+      sessionId,
+      sessionDir,
+      manifest: manifestPayload,
+      images: savedImages,
+      imageProfiles: profileFiles
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/generation-sessions/:id', (req, res) => {
+  try {
+    const sessionDir = findGenerationSessionDir(req.params.id)
+    if (!sessionDir) return res.status(404).json({ error: '生成素材包不存在' })
+
+    const readJson = (name, fallback) => {
+      const filePath = path.join(sessionDir, name)
+      return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf-8')) : fallback
+    }
+
+    const profilesDir = path.join(sessionDir, 'image_profiles')
+    const promptsDir = path.join(sessionDir, 'prompts')
+    const imageProfiles = fs.existsSync(profilesDir)
+      ? fs.readdirSync(profilesDir)
+          .filter(name => name.endsWith('.json'))
+          .sort()
+          .map(name => JSON.parse(fs.readFileSync(path.join(profilesDir, name), 'utf-8')))
+      : []
+
+    res.json({
+      sessionId: req.params.id,
+      sessionDir,
+      manifest: readJson('manifest.json', {}),
+      imageProfiles,
+      selectedCovers: readJson('selected_covers.json', []),
+      results: readJson('results.json', []),
+      prompts: fs.existsSync(promptsDir)
+        ? fs.readdirSync(promptsDir).filter(name => name.endsWith('.md')).sort()
+        : []
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/generation-sessions/:id/prompts', (req, res) => {
+  try {
+    const sessionDir = findGenerationSessionDir(req.params.id)
+    if (!sessionDir) return res.status(404).json({ error: '生成素材包不存在' })
+
+    const promptsDir = path.join(sessionDir, 'prompts')
+    fs.mkdirSync(promptsDir, { recursive: true })
+    const existingCount = fs.readdirSync(promptsDir).filter(name => name.endsWith('.md')).length
+    const promptItems = Array.isArray(req.body?.prompts)
+      ? req.body.prompts
+      : [req.body?.prompt].filter(Boolean)
+
+    promptItems.forEach((promptItem, index) => {
+      writePromptFiles(promptsDir, promptItem, existingCount + index)
+    })
+
+    res.json({ success: true, savedCount: promptItems.length })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ─── 小红书爬虫 ───────────────────────────────────────────────

@@ -7,3 +7,4 @@ dist/
 *.log
 pachong/xiaohongshu_notes/
 xiaohongshu_notes/
+server/generation_assets/

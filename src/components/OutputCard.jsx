@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-export default function OutputCard({ item, index, images, onRefreshTitle, onRefreshContent }) {
+export default function OutputCard({ item, index, images, onRefreshTitle, onRefreshContent, onUpdateItem }) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -23,7 +23,7 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
   const saveTitleDraft = () => {
     const nextTitle = titleDraft.trim()
     if (nextTitle) {
-      item.title = nextTitle
+      onUpdateItem && onUpdateItem(index, { title: nextTitle })
       setTitleDraft(nextTitle)
     } else {
       setTitleDraft(item.title || '')
@@ -53,7 +53,6 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
     try {
       const newTitle = await onRefreshTitle(item, index)
       if (newTitle) {
-        item.title = newTitle
         setTitleDraft(newTitle)
       }
     } finally {
@@ -67,7 +66,7 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
     try {
       const newContent = await onRefreshContent(item, index)
       if (newContent) {
-        item.content = newContent
+        onUpdateItem && onUpdateItem(index, { content: newContent })
       }
     } finally {
       setRefreshingContent(false)
@@ -109,9 +108,8 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
   }
 
   // 获取封面图片
-  const coverImage = images && item.coverIndex && item.coverIndex <= images.length 
-    ? images[item.coverIndex - 1] 
-    : null
+  const coverImage = images?.find(img => String(img.id) === String(item.imageId))
+    || (images && item.coverIndex && item.coverIndex <= images.length ? images[item.coverIndex - 1] : null)
 
   return (
     <div className="bg-white rounded-lg border border-gray-100 overflow-hidden shadow-sm">

@@ -51,6 +51,24 @@ export async function addToHistory(userId, item) {
   })
 }
 
+export async function createGenerationSession(userId, payload) {
+  return request('/generation-sessions', {
+    method: 'POST',
+    body: JSON.stringify({ userId, ...payload })
+  })
+}
+
+export async function getGenerationSession(sessionId) {
+  return request(`/generation-sessions/${encodeURIComponent(sessionId)}`)
+}
+
+export async function appendGenerationSessionPrompts(sessionId, prompts) {
+  return request(`/generation-sessions/${encodeURIComponent(sessionId)}/prompts`, {
+    method: 'POST',
+    body: JSON.stringify({ prompts })
+  })
+}
+
 // ─── 小红书爬虫 ───────────────────────────────────────────────
 
 export async function getXhsSession() {

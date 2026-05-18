@@ -36,6 +36,7 @@ function truncateText(text, maxLength) {
 }
 
 const MAX_IMAGES_FOR_AI = 50
+const IMAGE_ANALYSIS_BATCH_SIZE = 6
 
 function toImageDataUrl(img) {
   if (!img) return ''
@@ -78,6 +79,124 @@ function buildInfluencerStylePrompt(referenceSamples) {
 ${referenceSamples}`
 }
 
+function extractJsonArray(text) {
+  if (!text) throw new Error('AI 没有返回内容')
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const source = fenced ? fenced[1] : text
+  const jsonMatch = source.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) throw new Error('AI 返回中没有 JSON 数组')
+  return JSON.parse(jsonMatch[0])
+}
+
+function extractJsonObject(text) {
+  if (!text) throw new Error('AI 没有返回内容')
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const source = fenced ? fenced[1] : text
+  const jsonMatch = source.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('AI 返回中没有 JSON 对象')
+  return JSON.parse(jsonMatch[0])
+}
+
+function chunkArray(items, size) {
+  const chunks = []
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size))
+  }
+  return chunks
+}
+
+function buildFallbackImageProfile(img, imageIndex, rawText = '') {
+  const imageId = String(img.id || `image-${imageIndex}`)
+  return {
+    id: imageId,
+    imageId,
+    imageIndex,
+    name: img.name || `image_${imageIndex}`,
+    description: rawText || '图片描述解析失败，请人工查看原图。主体、场景、光线、构图和情绪需要后续补充。',
+    subject: '',
+    scene: '',
+    light: '',
+    composition: '',
+    emotion: '',
+    people: '',
+    highlights: '',
+    color: '',
+    aesthetics: '',
+    details: '',
+    risks: '',
+  }
+}
+
+function normalizeImageProfile(raw, img, imageIndex) {
+  const imageId = String(img.id || raw?.imageId || `image-${imageIndex}`)
+  const descriptionParts = [
+    raw?.description,
+    raw?.subject && `主体：${raw.subject}`,
+    raw?.scene && `场景：${raw.scene}`,
+    raw?.light && `光线：${raw.light}`,
+    raw?.composition && `构图：${raw.composition}`,
+    raw?.color && `色彩：${raw.color}`,
+    raw?.emotion && `情绪：${raw.emotion}`,
+    raw?.people && `人物状态：${raw.people}`,
+    raw?.highlights && `画面亮点：${raw.highlights}`,
+    raw?.aesthetics && `摄影美学：${raw.aesthetics}`,
+    raw?.details && `画面细节：${raw.details}`,
+    raw?.risks && `风险点：${raw.risks}`,
+  ].filter(Boolean)
+
+  return {
+    id: imageId,
+    imageId,
+    imageIndex,
+    name: img.name || raw?.fileName || `image_${imageIndex}`,
+    description: descriptionParts.join('\n') || raw?.summary || '',
+    subject: raw?.subject || '',
+    scene: raw?.scene || '',
+    light: raw?.light || '',
+    composition: raw?.composition || '',
+    color: raw?.color || '',
+    emotion: raw?.emotion || '',
+    people: raw?.people || '',
+    highlights: raw?.highlights || '',
+    aesthetics: raw?.aesthetics || '',
+    details: raw?.details || '',
+    risks: raw?.risks || '',
+  }
+}
+
+function summarizeImageProfile(profile) {
+  return `【图片${profile.imageIndex}】
+imageId：${profile.imageId}
+文件名：${profile.name || ''}
+主体：${profile.subject || ''}
+场景：${profile.scene || ''}
+光线：${profile.light || ''}
+构图：${profile.composition || ''}
+色彩：${profile.color || ''}
+情绪：${profile.emotion || ''}
+人物状态：${profile.people || ''}
+画面亮点：${profile.highlights || ''}
+摄影美学：${profile.aesthetics || ''}
+画面细节：${profile.details || ''}
+风险点：${profile.risks || ''}
+综合描述：${profile.description || ''}`
+}
+
+function buildReferenceContext(library, referenceSource, bloggerStyleProfile, maxSamples = 12) {
+  const samples = (library || []).slice(0, maxSamples).map((item, index) => buildReferenceSample(item, index)).join('\n\n')
+  if (referenceSource === 'influencer') {
+    return `【参考博主写作风格】
+${bloggerStyleProfile || '暂无单独风格文件，请参考下方样本的标题句式、正文节奏和语气。'}
+
+${samples ? `【少量原始样本】
+${samples}` : ''}`
+  }
+  if (referenceSource === 'viral') {
+    return samples ? `【爆款参考样本】\n${samples}` : ''
+  }
+  return samples ? `【参考素材】\n${samples}` : ''
+}
+
 // 通用请求
 async function chat(messages, options = {}) {
   const apiKey = getApiKey()
@@ -105,6 +224,306 @@ async function chat(messages, options = {}) {
 
   const data = await response.json()
   return data.choices[0].message.content
+}
+
+export async function analyzeUploadedImages(images, theme, options = {}) {
+  if (!images || images.length === 0) return []
+
+  const limitedImages = images.slice(0, MAX_IMAGES_FOR_AI)
+  const profiles = []
+  const onPrompt = options.onPrompt
+
+  for (const batch of chunkArray(limitedImages, IMAGE_ANALYSIS_BATCH_SIZE)) {
+    const batchStart = limitedImages.indexOf(batch[0])
+    const imageContents = batch.map(img => ({
+      type: 'image_url',
+      image_url: { url: toImageDataUrl(img) }
+    }))
+    const imageList = batch.map((img, idx) => {
+      const imageIndex = batchStart + idx + 1
+      return `${idx + 1}. imageId=${String(img.id || `image-${imageIndex}`)}，全局编号=${imageIndex}，文件名=${img.name || ''}`
+    }).join('\n')
+
+    const prompt = `你是专业摄影图片分析师。请逐张分析本批图片，只做客观、详尽的画面描述和摄影美学分析。
+
+主题：${theme || '未识别'}
+
+本步骤的唯一目标：为后续“小红书封面筛选”提供客观图片档案。
+严格禁止：
+- 不要参考任何博主信息。
+- 不要参考用户关键词。
+- 不要判断哪张更适合做封面。
+- 不要打分，不要输出任何分数或评分字段。
+- 不要生成标题建议、文案方向、选题方向。
+
+本批图片顺序如下，请严格按顺序输出同样数量的 JSON 元素：
+${imageList}
+
+每张图必须细致描述以下内容：
+1. 主体：画面中最重要的人/物/动作。
+2. 场景：室内/户外/窗边/仪式/街景等空间信息。
+3. 光线：光源方向、明暗、光比、质感、氛围。
+4. 构图：主体位置、景别、留白、前后景、画面层次。
+5. 色彩：主色调、冷暖、对比、饱和度、整体色彩感受。
+6. 情绪氛围：画面自然传递的情绪，不要写营销钩子。
+7. 人物状态：表情、姿态、互动、是否自然。
+8. 摄影美学：光影、空间、线条、虚实、质感、叙事感。
+9. 画面细节：值得注意的物件、动作、环境元素。
+10. 客观风险点：模糊、曝光、主体不清、画面杂乱等客观问题。
+11. 综合描述：不少于150字，完整描述画面内容和审美特征。
+
+只返回 JSON 数组，不要解释。格式：
+[
+  {
+    "imageId": "复制上面给出的imageId",
+    "imageIndex": 1,
+    "fileName": "文件名",
+    "description": "不少于120字的综合描述",
+    "subject": "",
+    "scene": "",
+    "light": "",
+    "composition": "",
+    "color": "",
+    "emotion": "",
+    "people": "",
+    "highlights": "",
+    "aesthetics": "",
+    "details": "",
+    "risks": ""
+  }
+]`
+
+    const promptMeta = {
+      step: 'image_analysis',
+      title: `图片描述分析 - 第 ${Math.floor(batchStart / IMAGE_ANALYSIS_BATCH_SIZE) + 1} 批`,
+      batchIndex: Math.floor(batchStart / IMAGE_ANALYSIS_BATCH_SIZE) + 1,
+      imageIndexes: batch.map((_, idx) => batchStart + idx + 1),
+      prompt,
+      createdAt: new Date().toISOString()
+    }
+
+    try {
+      const response = await chat([
+        {
+          role: 'user',
+          content: [
+            ...imageContents,
+            { type: 'text', text: prompt }
+          ]
+        }
+      ])
+      onPrompt && onPrompt({ ...promptMeta, response })
+      const parsed = extractJsonArray(response)
+      batch.forEach((img, idx) => {
+        const imageIndex = batchStart + idx + 1
+        profiles.push(normalizeImageProfile(parsed[idx] || {}, img, imageIndex))
+      })
+    } catch (err) {
+      console.error('图片分析失败:', err)
+      onPrompt && onPrompt({ ...promptMeta, error: err.message })
+      batch.forEach((img, idx) => {
+        const imageIndex = batchStart + idx + 1
+        profiles.push(buildFallbackImageProfile(img, imageIndex, err.message))
+      })
+    }
+  }
+
+  return profiles
+}
+
+export async function selectCoverImages(imageProfiles, bloggerCoverStyleProfile = '', options = {}) {
+  const profiles = Array.isArray(imageProfiles) ? imageProfiles : []
+  if (profiles.length <= 4) {
+    return profiles
+      .slice()
+      .map((profile, index) => ({
+        ...profile,
+        selectedRank: index + 1,
+        selectedReason: bloggerCoverStyleProfile
+          ? '候选图片数量不超过4张，直接入选；后续文案将围绕该图生成。'
+          : '候选图片数量不超过4张，且缺少博主封面策略，按上传顺序直接入选。',
+      }))
+  }
+
+  const profileText = profiles.map(summarizeImageProfile).join('\n\n')
+  const prompt = `你是小红书封面主编。请基于下面每张图片的详细档案，从中选出4张最适合作为封面的图片。
+
+选择原则：
+1. 必须参考当前博主的 cover_style_profile，判断哪些图片更符合该博主过往封面审美和选择习惯。
+2. 同时结合小红书封面通用标准：第一眼吸引力、缩略图可读性、主体辨识度、构图完整度、光线质感、情绪张力、画面差异化。
+3. 只做封面筛选，不要创作标题、文案、标题方向或内容角度。
+4. 不要输出分数，只输出入选图片和选择理由。
+
+${bloggerCoverStyleProfile ? `【必须参考的博主 cover_style_profile】\n${bloggerCoverStyleProfile}\n` : '【必须记录】当前缺少博主 cover_style_profile，只能基于图片审美、摄影质量与小红书封面通用标准筛选。\n'}
+
+【图片档案】
+${profileText}
+
+只返回 JSON 数组，必须正好4个元素：
+[
+  {
+    "imageId": "",
+    "imageIndex": 1,
+    "selectedReason": "入选原因，说明分数、视觉差异和博主策略依据"
+  }
+]`
+
+  try {
+    const response = await chat([{ role: 'user', content: prompt }])
+    options.onPrompt && options.onPrompt({
+      step: 'cover_selection',
+      title: '封面选择',
+      prompt,
+      response,
+      createdAt: new Date().toISOString()
+    })
+    const choices = extractJsonArray(response)
+    const usedIds = new Set()
+    const selected = []
+
+    for (const choice of choices) {
+      const profile = profiles.find(item =>
+        String(item.imageId) === String(choice.imageId)
+        || Number(item.imageIndex) === Number(choice.imageIndex)
+      )
+      if (profile && !usedIds.has(profile.imageId)) {
+        usedIds.add(profile.imageId)
+        selected.push({
+          ...profile,
+          selectedRank: selected.length + 1,
+          selectedReason: choice.selectedReason || '',
+        })
+      }
+      if (selected.length >= 4) break
+    }
+
+    const fallback = profiles.slice()
+    for (const profile of fallback) {
+      if (selected.length >= 4) break
+      if (!usedIds.has(profile.imageId)) {
+        usedIds.add(profile.imageId)
+        selected.push({
+          ...profile,
+          selectedRank: selected.length + 1,
+          selectedReason: 'AI 选择结果不足4张，按上传顺序补足入选。',
+        })
+      }
+    }
+
+    return selected
+  } catch (err) {
+    console.error('封面选择失败:', err)
+    options.onPrompt && options.onPrompt({
+      step: 'cover_selection',
+      title: '封面选择',
+      prompt,
+      error: err.message,
+      createdAt: new Date().toISOString()
+    })
+    return profiles
+      .slice()
+      .slice(0, 4)
+      .map((profile, index) => ({
+        ...profile,
+        selectedRank: index + 1,
+        selectedReason: '封面选择解析失败，按上传顺序兜底入选。',
+      }))
+  }
+}
+
+export async function generateContentFromSelectedProfiles(selectedProfiles, keywords, theme, library, referenceSource = 'all', bloggerStyleProfile = null, options = {}) {
+  const profiles = (selectedProfiles || []).slice(0, 4)
+  if (profiles.length === 0) throw new Error('缺少已选封面图片描述')
+
+  const keywordInstruction = keywords
+    ? `用户关键词：${keywords}。必须自然融入标题和正文，不要生硬堆砌。`
+    : '用户没有填写关键词，不要假设关键词。'
+  const referenceContext = buildReferenceContext(library, referenceSource, bloggerStyleProfile)
+  const profileContext = profiles.map(summarizeImageProfile).join('\n\n')
+
+  const prompt = `你是小红书摄影内容专家。现在已经完成图片分析和封面选择，你只需要基于入选的4张封面图片描述生成4组标题和文案。
+
+重要限制：
+- 不要重新选择封面。
+- 不要输出未入选图片。
+- 每组标题和正文必须严格围绕对应 imageId/imageIndex 的图片描述来写。
+- 返回顺序必须与下面“入选封面”顺序一致。
+- 禁止复制参考素材原句。
+
+主题：${theme || '婚礼跟拍'}
+${keywordInstruction}
+
+${referenceContext}
+
+【入选封面图片描述】
+${profileContext}
+
+只返回 JSON 数组，必须正好4个元素：
+[
+  {
+    "imageId": "对应图片imageId",
+    "imageIndex": 1,
+    "title": "标题",
+    "content": "正文",
+    "coverReason": "为什么这张封面适合这组标题文案",
+    "reason": "模仿参考博主哪些写法，以及原创变化"
+  }
+]`
+
+  const response = await chat([{ role: 'user', content: prompt }])
+  options.onPrompt && options.onPrompt({
+    step: 'content_generation',
+    title: '标题文案生成',
+    prompt,
+    response,
+    createdAt: new Date().toISOString()
+  })
+  return response
+}
+
+export async function refreshSingleGeneratedItem({ mode, item, imageProfile, keywords, theme, bloggerStyleProfile = '' }) {
+  if (!item) throw new Error('缺少要刷新的内容')
+  if (!imageProfile) throw new Error('缺少当前封面图片描述')
+
+  const isTitle = mode === 'title'
+  const prompt = `你是小红书摄影内容编辑。请只刷新当前这一条${isTitle ? '标题' : '文案'}，不要生成其他帖子，不要改变封面图。
+
+【当前封面图片描述】
+${summarizeImageProfile(imageProfile)}
+
+【当前内容】
+标题：${item.title || ''}
+正文：${item.content || ''}
+
+主题：${theme || '婚礼跟拍'}
+用户关键词：${keywords || '无'}
+
+【参考博主写作风格】
+${bloggerStyleProfile || '暂无'}
+
+要求：
+1. 必须围绕当前这张封面图片描述来写。
+2. 必须参考博主的标题句式、正文节奏和语气。
+3. 必须自然融合关键词；没有关键词就不要硬写。
+4. 不要返回4组，不要换封面。
+5. ${isTitle ? '只改标题，正文保持原方向；新标题要和旧标题明显不同。' : '只改正文，标题保持原方向；新文案要和旧文案明显不同。'}
+
+只返回 JSON 对象：
+${isTitle ? '{"title": "新标题"}' : '{"content": "新文案"}'}`
+
+  const response = await chat([{ role: 'user', content: prompt }])
+  return {
+    ...extractJsonObject(response),
+    prompt,
+    response,
+    promptMeta: {
+      step: isTitle ? 'refresh_title' : 'refresh_content',
+      title: isTitle ? `刷新标题 - 图片${imageProfile.imageIndex}` : `刷新文案 - 图片${imageProfile.imageIndex}`,
+      imageId: imageProfile.imageId,
+      imageIndex: imageProfile.imageIndex,
+      createdAt: new Date().toISOString()
+    }
+  }
 }
 
 // 分析图片（返回图片描述）
@@ -278,11 +697,6 @@ export async function generateContent(images, keywords, library, theme, referenc
 【该博主风格总结】
 ${styleProfile}
 
-${bloggerCoverStyleProfile ? `【该博主封面风格总结】
-${bloggerCoverStyleProfile}
-
-` : ''}
-
 【仿写要求】
 - 模仿标题的句式、长度、标点、情绪强度、口语感和小红书钩子方式
 - 模仿正文的段落节奏、换行习惯、表达顺序、语气词、emoji 和话题标签习惯
@@ -318,7 +732,6 @@ ${bloggerCoverStyleProfile}
 3. 重点观察主体辨识度、人物表情/动作、情绪张力、构图、光线、色彩、场景信息量和小红书首页缩略图下的可读性
 4. 4张封面要有差异化：不同构图、不同场景、不同情绪，不要选太相似的图
 5. 封面编号必须是1-${imagesToSend.length}之间的数字
-${bloggerCoverStyleProfile ? '6. 必须优先参考「该博主封面风格总结」来判断哪些图片更像这位博主会选的封面，并在 coverReason 里说明对应依据' : ''}
 
 【生成优先级】
 1. 首先参考你选中的那张封面图片内容：标题和正文要能解释、放大或承接这张图的画面情绪与内容

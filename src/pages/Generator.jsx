@@ -1,8 +1,26 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import OutputCard from '../components/OutputCard'
 import ImageUploader from '../components/ImageUploader'
-import { generateContent, detectTheme, analyzeInfluencerStyle } from '../services/ai'
-import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, getBloggerCoverStyle, saveBloggerStyle, generateBloggerStyleFile } from '../services/api'
+import {
+  analyzeUploadedImages,
+  selectCoverImages,
+  generateContent,
+  generateContentFromSelectedProfiles,
+  refreshSingleGeneratedItem,
+  detectTheme,
+  analyzeInfluencerStyle
+} from '../services/ai'
+import {
+  addToHistory,
+  appendGenerationSessionPrompts,
+  createGenerationSession,
+  getExcelBloggerPosts,
+  getExcelBloggers,
+  getBloggerStyle,
+  getBloggerCoverStyle,
+  saveBloggerStyle,
+  generateBloggerStyleFile
+} from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
   const [images, setImages] = useState([])
@@ -14,7 +32,8 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const [detectedTheme, setDetectedTheme] = useState('')
   const [lastFilteredLibrary, setLastFilteredLibrary] = useState([])
   const [lastBloggerStyle, setLastBloggerStyle] = useState(null)
-  const [lastBloggerCoverStyle, setLastBloggerCoverStyle] = useState(null)
+  const [lastImageProfiles, setLastImageProfiles] = useState([])
+  const [lastSessionId, setLastSessionId] = useState('')
   
   // 参考来源选择
   const [referenceSource, setReferenceSource] = useState('influencer') // 'influencer' | 'viral'
@@ -151,6 +170,56 @@ export default function Generator({ userId, username, library, onDataChange }) {
     return filtered.sort((a, b) => (b.likes || 0) - (a.likes || 0))
   }
 
+  const extractJsonArray = (text) => {
+    const fenced = text?.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    const source = fenced ? fenced[1] : text
+    const jsonMatch = source?.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) return []
+    try {
+      const parsed = JSON.parse(jsonMatch[0])
+      return Array.isArray(parsed) ? parsed : []
+    } catch (err) {
+      console.error('解析生成结果失败:', err)
+      return []
+    }
+  }
+
+  const normalizeGeneratedResultsFromProfiles = (responseText, selectedProfiles) => {
+    const parsed = extractJsonArray(responseText)
+    return selectedProfiles.slice(0, 4).map((profile, index) => {
+      const matched = parsed.find(item =>
+        String(item.imageId || '') === String(profile.imageId)
+        || Number(item.imageIndex) === Number(profile.imageIndex)
+      ) || parsed[index] || {}
+
+      return {
+        id: `${profile.imageId || profile.imageIndex}-${Date.now()}-${index}`,
+        imageId: profile.imageId,
+        imageIndex: profile.imageIndex,
+        imageProfile: profile,
+        coverIndex: profile.imageIndex,
+        title: matched.title || `标题 ${index + 1}`,
+        content: matched.content || '',
+        coverReason: matched.coverReason || profile.selectedReason || '',
+        reason: matched.reason || '基于当前封面描述和参考博主风格生成',
+        index
+      }
+    })
+  }
+
+  const getProfileForItem = (item) => {
+    return item?.imageProfile
+      || lastImageProfiles.find(profile => String(profile.imageId) === String(item?.imageId))
+      || lastImageProfiles.find(profile => Number(profile.imageIndex) === Number(item?.imageIndex || item?.coverIndex))
+      || null
+  }
+
+  const handleUpdateResult = useCallback((index, patch) => {
+    setResults(prev => prev.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, ...patch } : item
+    ))
+  }, [])
+
   const handleGenerate = async () => {
     if (images.length > 0 && images.length < 4) {
       setError('请至少上传 4 张候选图片，AI 才能从中挑选 4 张封面')
@@ -177,10 +246,12 @@ export default function Generator({ userId, username, library, onDataChange }) {
       let filteredLibrary = []
       let bloggerStyleProfile = null
       let bloggerCoverStyleProfile = null
+      let referenceName = ''
       
       if (referenceSource === 'influencer' && selectedInfluencer) {
         const [sourceType, ...nameParts] = selectedInfluencer.split(':')
         const influencerName = nameParts.join(':')
+        referenceName = influencerName
 
         if (sourceType === 'excel') {
           const data = await getExcelBloggerPosts(influencerName, 'all')
@@ -232,26 +303,89 @@ export default function Generator({ userId, username, library, onDataChange }) {
       } else if (referenceSource === 'viral') {
         // 热门帖子：根据时间范围和主题筛选
         filteredLibrary = filterViralPosts(library, viralTimeRange, viralTheme)
+        referenceName = '热门帖子'
       }
 
-      // 生成内容
-      setLoadingStatus(images.length > 0 ? 'AI 正在挑选封面并生成文案...' : 'AI 正在生成文案...')
-      const response = await generateContent(images, keywords.trim(), filteredLibrary, theme, referenceSource, bloggerStyleProfile, bloggerCoverStyleProfile)
-      const parsedResults = parseAIResponse(response)
+      let parsedResults = []
+      let imageProfiles = []
+      let selectedProfiles = []
+      let sessionId = ''
+      const promptLogs = []
+      const recordPrompt = (promptItem) => {
+        promptLogs.push(promptItem)
+      }
+
+      if (images.length > 0) {
+        setLoadingStatus(`AI 正在逐张分析 ${images.length} 张图片...`)
+        imageProfiles = await analyzeUploadedImages(images, theme, { onPrompt: recordPrompt })
+
+        setLoadingStatus('AI 正在根据图片描述选择4张封面...')
+        selectedProfiles = await selectCoverImages(imageProfiles, bloggerCoverStyleProfile, { onPrompt: recordPrompt })
+        if (selectedProfiles.length < 4) {
+          throw new Error('可用封面不足4张，请检查上传图片')
+        }
+
+        setLoadingStatus('AI 正在根据4张封面描述生成标题和文案...')
+        const response = await generateContentFromSelectedProfiles(
+          selectedProfiles,
+          keywords.trim(),
+          theme,
+          filteredLibrary,
+          referenceSource,
+          bloggerStyleProfile,
+          { onPrompt: recordPrompt }
+        )
+        parsedResults = normalizeGeneratedResultsFromProfiles(response, selectedProfiles)
+
+        try {
+          const session = await createGenerationSession(userId, {
+            images: images.map((img, index) => ({
+              ...img,
+              imageId: String(img.id),
+              imageIndex: index + 1
+            })),
+            imageProfiles,
+            selectedCovers: selectedProfiles,
+            results: parsedResults,
+            prompts: promptLogs,
+            manifest: {
+              keywords: keywords.trim(),
+              theme,
+              referenceSource,
+              referenceName,
+              imageCount: images.length
+            }
+          })
+          sessionId = session.sessionId || ''
+          setLastSessionId(sessionId)
+        } catch (e) {
+          console.error('保存生成素材包失败:', e)
+        }
+      } else {
+        setLoadingStatus('AI 正在生成文案...')
+        const response = await generateContent(images, keywords.trim(), filteredLibrary, theme, referenceSource, bloggerStyleProfile, bloggerCoverStyleProfile)
+        parsedResults = parseAIResponse(response)
+      }
+
       setResults(parsedResults)
 
       // 保存本次素材和风格，供刷新使用
       setLastFilteredLibrary(filteredLibrary)
       setLastBloggerStyle(bloggerStyleProfile)
-      setLastBloggerCoverStyle(bloggerCoverStyleProfile)
+      setLastImageProfiles(imageProfiles)
+      if (!images.length) setLastSessionId('')
 
       // 保存到服务器
       try {
         await addToHistory(userId, {
-          images: images.map(i => i.url),
+          images: images.length > 0 ? [] : images.map(i => i.url),
           keywords,
           theme,
-          results: parsedResults
+          results: images.length > 0 ? [] : parsedResults,
+          sessionId,
+          summary: images.length > 0
+            ? `分析${images.length}张图片，选出4张封面并生成4组内容`
+            : '纯文字生成4组内容'
         })
         onDataChange && onDataChange()
       } catch (e) {
@@ -267,55 +401,83 @@ export default function Generator({ userId, username, library, onDataChange }) {
 
   // 刷新单个标题
   const handleRefreshTitle = useCallback(async (item, index) => {
-    if (!selectedInfluencer) return null
     setLoading(true)
     setLoadingStatus(`正在刷新第 ${index + 1} 组标题...`)
     try {
-      const [/* sourceType */, ...nameParts] = selectedInfluencer.split(':')
-      const influencerName = nameParts.join(':')
-      const bloggerStyle = await getBloggerStyle(influencerName)
-      const styleProfile = bloggerStyle.exists ? bloggerStyle.style : null
-
-      // 传入当前标题，让AI避免生成相似的
-      const response = await generateContent(images, keywords, lastFilteredLibrary, detectedTheme || '婚礼跟拍', referenceSource, styleProfile || lastBloggerStyle, lastBloggerCoverStyle, { refreshTitle: item.title, refreshIndex: index })
-      const parsed = parseAIResponse(response)
-      // 刷新时AI返回4个结果，取对应index的项
-      const newItem = Array.isArray(parsed) ? (parsed[index] || parsed[0]) : parsed
+      const imageProfile = getProfileForItem(item)
+      const refreshed = await refreshSingleGeneratedItem({
+        mode: 'title',
+        item,
+        imageProfile,
+        keywords,
+        theme: detectedTheme || '婚礼跟拍',
+        bloggerStyleProfile: lastBloggerStyle || ''
+      })
+      const newTitle = refreshed?.title || ''
+      if (lastSessionId && refreshed?.prompt) {
+        appendGenerationSessionPrompts(lastSessionId, [{
+          ...(refreshed.promptMeta || {}),
+          prompt: refreshed.prompt,
+          response: refreshed.response,
+          oldTitle: item.title,
+          oldContent: item.content
+        }]).catch(err => console.error('保存刷新标题提示词失败:', err))
+      }
+      if (newTitle) {
+        setResults(prev => prev.map(result =>
+          result.id === item.id ? { ...result, title: newTitle } : result
+        ))
+      }
       setLoadingStatus('')
-      return newItem && newItem.title ? newItem.title : null
+      return newTitle || null
     } catch (err) {
+      console.error('刷新标题失败:', err)
       setLoadingStatus('')
       return null
     } finally {
       setLoading(false)
     }
-  }, [images, keywords, selectedInfluencer, referenceSource, detectedTheme, lastFilteredLibrary, lastBloggerStyle, lastBloggerCoverStyle])
+  }, [keywords, detectedTheme, lastBloggerStyle, lastImageProfiles, lastSessionId])
 
   // 刷新单个文案
   const handleRefreshContent = useCallback(async (item, index) => {
-    if (!selectedInfluencer) return null
     setLoading(true)
     setLoadingStatus(`正在刷新第 ${index + 1} 组文案...`)
     try {
-      const [/* sourceType */, ...nameParts] = selectedInfluencer.split(':')
-      const influencerName = nameParts.join(':')
-      const bloggerStyle = await getBloggerStyle(influencerName)
-      const styleProfile = bloggerStyle.exists ? bloggerStyle.style : null
-
-      // 传入当前文案，让AI避免生成相似的
-      const response = await generateContent(images, keywords, lastFilteredLibrary, detectedTheme || '婚礼跟拍', referenceSource, styleProfile || lastBloggerStyle, lastBloggerCoverStyle, { refreshContent: item.content, refreshIndex: index })
-      const parsed = parseAIResponse(response)
-      // 刷新时AI返回4个结果，取对应index的项
-      const newItem = Array.isArray(parsed) ? (parsed[index] || parsed[0]) : parsed
+      const imageProfile = getProfileForItem(item)
+      const refreshed = await refreshSingleGeneratedItem({
+        mode: 'content',
+        item,
+        imageProfile,
+        keywords,
+        theme: detectedTheme || '婚礼跟拍',
+        bloggerStyleProfile: lastBloggerStyle || ''
+      })
+      const newContent = refreshed?.content || ''
+      if (lastSessionId && refreshed?.prompt) {
+        appendGenerationSessionPrompts(lastSessionId, [{
+          ...(refreshed.promptMeta || {}),
+          prompt: refreshed.prompt,
+          response: refreshed.response,
+          oldTitle: item.title,
+          oldContent: item.content
+        }]).catch(err => console.error('保存刷新文案提示词失败:', err))
+      }
+      if (newContent) {
+        setResults(prev => prev.map(result =>
+          result.id === item.id ? { ...result, content: newContent } : result
+        ))
+      }
       setLoadingStatus('')
-      return newItem && newItem.content ? newItem.content : null
+      return newContent || null
     } catch (err) {
+      console.error('刷新文案失败:', err)
       setLoadingStatus('')
       return null
     } finally {
       setLoading(false)
     }
-  }, [images, keywords, selectedInfluencer, referenceSource, detectedTheme, lastFilteredLibrary, lastBloggerStyle, lastBloggerCoverStyle])
+  }, [keywords, detectedTheme, lastBloggerStyle, lastImageProfiles, lastSessionId])
 
   const parseAIResponse = (text) => {
     const normalizeCoverIndex = (value, fallback) => {
@@ -741,6 +903,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
                 images={images}
                 onRefreshTitle={handleRefreshTitle}
                 onRefreshContent={handleRefreshContent}
+                onUpdateItem={handleUpdateResult}
               />
             ))}
           </div>
