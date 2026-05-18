@@ -9,6 +9,11 @@ import { chromium } from 'playwright-core'
 
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 
+// AI 配置（用于生成风格文件）
+const AI_API_KEY = process.env.AI_API_KEY || ''
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.deepseek.com'
+const AI_MODEL = process.env.AI_MODEL || 'deepseek-chat'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, '..')
 const app = express()
@@ -521,6 +526,54 @@ app.post('/api/xhs/bloggers/:name/style', (req, res) => {
   }
 })
 
+// 调用 AI 生成博主风格总结
+async function generateBloggerStyle(bloggerName, posts) {
+  if (!AI_API_KEY || posts.length === 0) {
+    return null
+  }
+
+  // 构建素材文本
+  const samples = posts.slice(0, 30).map((post, index) => {
+    return `【素材${index + 1}】
+标题：${post.title || ''}
+正文：${post.content || ''}`
+  }).join('\n\n')
+
+  const prompt = `你是一名小红书文案风格分析师。请基于下面这位博主的所有标题和正文，提炼一个可用于后续仿写的「风格总结」。
+
+请深度分析，不要泛泛而谈。重点观察：
+1. 标题撰写特征：常见句式、标题长度、标点习惯、情绪强度、钩子方式、是否爱用反差/疑问/感叹/场景化词汇。
+2. 正文撰写特征：开头方式、段落长度、换行节奏、叙事顺序、口语化程度、常见语气词、emoji 使用、是否爱用清单/故事/感谢/感受。
+
+${samples}
+
+输出一份结构化风格总结，控制在 900 字以内。只输出风格总结，不要创作新文案。`
+
+  try {
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`AI API 错误: ${response.status}`)
+    }
+
+    const data = await response.json()
+    return data.choices[0].message.content
+  } catch (err) {
+    console.error('生成风格文件失败:', err)
+    return null
+  }
+}
+
 // 检查登录态
 app.get('/api/xhs/session', (req, res) => {
   const cookies = loadCookies()
@@ -642,6 +695,37 @@ app.post('/api/xhs/scrape', async (req, res) => {
 
   try {
     const result = await runPythonXhsScraper({ url, count, sourceName: url, existingNoteIds })
+    
+    // 爬取完成后，如果有博主名且有新帖子，自动生成/更新风格文件
+    if (result.bloggerName && result.posts && result.posts.length > 0) {
+      console.log(`[风格文件] 检测到博主: ${result.bloggerName}，准备生成风格文件...`)
+      
+      // 异步生成风格文件（不阻塞响应）
+      generateBloggerStyle(result.bloggerName, result.posts).then(style => {
+        if (style) {
+          const styleFilePath = getStyleFilePath(result.bloggerName)
+          const bloggerDir = path.dirname(styleFilePath)
+          
+          // 确保博主文件夹存在
+          if (!fs.existsSync(bloggerDir)) {
+            fs.mkdirSync(bloggerDir, { recursive: true })
+          }
+          
+          const styleData = {
+            bloggerName: result.bloggerName,
+            style: style,
+            postCount: result.posts.length,
+            updatedAt: new Date().toISOString()
+          }
+          
+          fs.writeFileSync(styleFilePath, JSON.stringify(styleData, null, 2), 'utf-8')
+          console.log(`[风格文件] 已保存: ${styleFilePath}`)
+        }
+      }).catch(err => {
+        console.error('[风格文件] 生成失败:', err)
+      })
+    }
+    
     res.json(result)
   } catch (err) {
     res.status(500).json({ error: err.message })

@@ -15,6 +15,7 @@ export default function ImageUploader({ images, onImagesChange }) {
             id: Date.now() + Math.random(),
             url: e.target.result,
             name: file.name,
+            mimeType: file.type || 'image/jpeg',
             base64: e.target.result.split(',')[1]
           })
         }

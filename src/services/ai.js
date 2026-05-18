@@ -35,6 +35,15 @@ function truncateText(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
+const MAX_IMAGES_FOR_AI = 50
+
+function toImageDataUrl(img) {
+  if (!img) return ''
+  if (img.url?.startsWith('data:') || img.url?.startsWith('http')) return img.url
+  if (img.base64) return `data:${img.mimeType || 'image/jpeg'};base64,${img.base64}`
+  return img.url || ''
+}
+
 function buildReferenceSample(item, index) {
   const originalTitle = item.originalTitle || item.title || ''
   const originalContent = item.originalContent || item.content || ''
@@ -111,7 +120,7 @@ export async function analyzeImage(imageBase64, imageUrl = '') {
     imageContent = {
       type: 'image_url',
       image_url: {
-        url: `data:image/jpeg;base64,${imageBase64}`
+        url: imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`
       }
     }
   } else if (imageUrl) {
@@ -163,7 +172,7 @@ export async function detectTheme(images) {
   const imageContents = images.map(img => ({
     type: 'image_url',
     image_url: {
-      url: img.base64 ? `data:image/jpeg;base64,${img.base64}` : img.url
+      url: toImageDataUrl(img)
     }
   }))
 
@@ -227,12 +236,12 @@ export async function generateContent(images, keywords, library, theme, referenc
   const baseUrl = getBaseUrl()
   const hasImages = images.length > 0
 
-  // 图片内容构建（最多发送20张给AI，避免超出token限制）
-  const imagesToSend = images.slice(0, 20)
+  // 图片内容构建（最多发送50张给AI，对应上传上限）
+  const imagesToSend = images.slice(0, MAX_IMAGES_FOR_AI)
   const imageContents = imagesToSend.map((img, idx) => ({
     type: 'image_url',
     image_url: {
-      url: img.base64 ? `data:image/jpeg;base64,${img.base64}` : img.url
+      url: toImageDataUrl(img)
     }
   }))
 
@@ -271,7 +280,7 @@ ${styleProfile}
 【仿写要求】
 - 模仿标题的句式、长度、标点、情绪强度、口语感和小红书钩子方式
 - 模仿正文的段落节奏、换行习惯、表达顺序、语气词、emoji 和话题标签习惯
-- 必须融合用户关键词重新创作
+- 如果用户填写了关键词，必须融合关键词重新创作；如果未填写，不要假设关键词
 - 禁止直接复制任何原标题
 - 禁止连续照搬原正文中的完整句子
 - 新内容要像同一位博主新写的一篇，而不是对素材做摘要
@@ -286,51 +295,63 @@ ${styleProfile}
     libraryContext = `${referenceHint}${referenceSamples}`
   }
 
-  const imageInstruction = hasImages ? `用户上传了${images.length}张${theme}主题的照片，需要你从中智能选择4张作为封面，并生成4组完全不同风格的标题和文案。
+  const keywordInstruction = keywords
+    ? `用户关键词：${keywords}。需要自然融入标题和正文，不要生硬堆砌。`
+    : '用户没有填写关键词。本次生成不要假设关键词，也不要为了凑关键词硬写无关内容。'
+
+  const imageInstruction = hasImages ? `用户上传了${images.length}张${theme}主题的照片，需要你从中智能选择4张作为小红书封面，并基于每张被选中的封面内容生成4组完全不同风格的标题和文案。
 
 【照片说明】
 - 共上传${images.length}张照片，编号为1到${images.length}
-- 已为你提供前${imagesToSend.length}张照片供分析
-- 你需要从这${images.length}张中选择4张作为封面，编号范围是1-${images.length}
+- 已为你提供${imagesToSend.length}张照片供分析
+- 你需要从这些照片中选择4张作为封面，编号范围是1-${imagesToSend.length}
 
 【封面选择要求】
-1. 从${images.length}张图片中选择4张作为封面
-2. 4张封面要有差异化：不同构图、不同场景、不同情绪
-3. 封面要能吸引用户点击，有视觉冲击力
-4. 封面编号必须是1-${images.length}之间的数字`
-    : `当前是纯文字测试模式，用户没有上传照片。请只根据用户关键词和参考博主的标题、正文，生成4组完全不同风格的小红书标题和正文。
+1. 从${imagesToSend.length}张图片中选择4张作为封面
+2. 优先判断画面内容是否吸引人、是否有停留感、是否能引起点击和讨论、是否具备成为爆款封面的潜力
+3. 重点观察主体辨识度、人物表情/动作、情绪张力、构图、光线、色彩、场景信息量和小红书首页缩略图下的可读性
+4. 4张封面要有差异化：不同构图、不同场景、不同情绪，不要选太相似的图
+5. 封面编号必须是1-${imagesToSend.length}之间的数字
+
+【生成优先级】
+1. 首先参考你选中的那张封面图片内容：标题和正文要能解释、放大或承接这张图的画面情绪与内容
+2. 其次参考关键词：${keywordInstruction}
+3. 最后参考博主人设风格、过往标题和文案素材：学习句式、语气、结构和标签习惯，但不能照抄`
+    : `当前是纯文字测试模式，用户没有上传照片。请根据关键词和参考博主的标题、正文，生成4组完全不同风格的小红书标题和正文。
 
 【纯文字测试要求】
 1. 不要分析图片，不要选择封面
 2. 不要输出 coverIndex 和 coverReason
-3. 重点模仿参考博主的标题句式、正文结构、语气和标签习惯`
+3. ${keywordInstruction}
+4. 重点模仿参考博主的标题句式、正文结构、语气和标签习惯`
 
+  const coverExamples = [2, 5, 1, 3].map((index, fallback) => Math.min(index, imagesToSend.length || fallback + 1))
   const outputShape = hasImages ? `[
   {
     "title": "标题1（模仿参考博主句式，不能照抄）",
     "content": "正文1（模仿参考博主表达结构，融合关键词）",
-    "coverIndex": 2,
+    "coverIndex": ${coverExamples[0]},
     "coverReason": "为什么选这张图片作为封面（从构图/光线/表情等角度分析）",
     "reason": "模仿了参考博主哪些句式/结构，同时做了哪些原创变化"
   },
   {
     "title": "标题2（模仿参考博主句式，不能照抄）",
     "content": "正文2（模仿参考博主表达结构，融合关键词）",
-    "coverIndex": 5,
+    "coverIndex": ${coverExamples[1]},
     "coverReason": "为什么选这张图片作为封面（从构图/光线/表情等角度分析）",
     "reason": "模仿了参考博主哪些句式/结构，同时做了哪些原创变化"
   },
   {
     "title": "标题3（模仿参考博主句式，不能照抄）",
     "content": "正文3（模仿参考博主表达结构，融合关键词）",
-    "coverIndex": 1,
+    "coverIndex": ${coverExamples[2]},
     "coverReason": "为什么选这张图片作为封面（从构图/光线/表情等角度分析）",
     "reason": "模仿了参考博主哪些句式/结构，同时做了哪些原创变化"
   },
   {
     "title": "标题4（模仿参考博主句式，不能照抄）",
     "content": "正文4（模仿参考博主表达结构，融合关键词）",
-    "coverIndex": 3,
+    "coverIndex": ${coverExamples[3]},
     "coverReason": "为什么选这张图片作为封面（从构图/光线/表情等角度分析）",
     "reason": "模仿了参考博主哪些句式/结构，同时做了哪些原创变化"
   }
@@ -365,12 +386,13 @@ ${libraryContext}
 
 【内容生成要求】
 每组内容必须完全不同！4组之间要有明显差异：
-1. 标题要像参考博主会写的新标题，但不能和任何原标题一模一样
-2. 正文要像参考博主会写的新正文，但不能连续照搬原文完整句子
-3. 标题和正文都必须自然融合用户关键词，不要生硬堆砌
-4. 4组之间可以从不同素材的句式里变体，但不要机械套模板
+1. 如果有封面图，标题和正文必须先围绕该组 coverIndex 对应图片的画面内容、情绪、场景和爆款潜力来写
+2. 标题要像参考博主会写的新标题，但不能和任何原标题一模一样
+3. 正文要像参考博主会写的新正文，但不能连续照搬原文完整句子
+4. ${keywordInstruction}
+5. 4组之间可以从不同素材的句式里变体，但不要机械套模板
 
-用户关键词：${keywords}
+${keywordInstruction}
 
 【输出格式】只返回一个JSON数组，每个元素的title和content都要独特，不能有任何相似：
 ${outputShape}`

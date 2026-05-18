@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo } from 'react'
 import OutputCard from '../components/OutputCard'
+import ImageUploader from '../components/ImageUploader'
 import { generateContent, detectTheme, analyzeInfluencerStyle } from '../services/ai'
 import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, saveBloggerStyle } from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
-  const [images] = useState([])
+  const [images, setImages] = useState([])
   const [keywords, setKeywords] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState('')
@@ -148,13 +149,14 @@ export default function Generator({ userId, username, library, onDataChange }) {
   }
 
   const handleGenerate = async () => {
-    if (!keywords.trim()) {
-      setError('请输入关键词')
+    if (images.length > 0 && images.length < 4) {
+      setError('请至少上传 4 张候选图片，AI 才能从中挑选 4 张封面')
       return
     }
 
     setError('')
     setLoading(true)
+    setLoadingStatus('')
 
     try {
       // 纯文字测试模式下没有图片时跳过主题识别
@@ -214,7 +216,8 @@ export default function Generator({ userId, username, library, onDataChange }) {
       }
 
       // 生成内容
-      const response = await generateContent(images, keywords, filteredLibrary, theme, referenceSource, bloggerStyleProfile)
+      setLoadingStatus(images.length > 0 ? 'AI 正在挑选封面并生成文案...' : 'AI 正在生成文案...')
+      const response = await generateContent(images, keywords.trim(), filteredLibrary, theme, referenceSource, bloggerStyleProfile)
       const parsedResults = parseAIResponse(response)
       setResults(parsedResults)
 
@@ -234,10 +237,20 @@ export default function Generator({ userId, username, library, onDataChange }) {
       setError(err.message)
     } finally {
       setLoading(false)
+      setLoadingStatus('')
     }
   }
 
   const parseAIResponse = (text) => {
+    const normalizeCoverIndex = (value, fallback) => {
+      if (images.length === 0) return undefined
+      const parsed = Number.parseInt(value, 10)
+      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= images.length) {
+        return parsed
+      }
+      return Math.min(fallback, images.length)
+    }
+
     // 尝试解析 JSON 格式
     try {
       // 尝试匹配 JSON 数组
@@ -248,7 +261,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
           return parsed.slice(0, 4).map((item, i) => ({
             title: item.title || `标题 ${i + 1}`,
             content: item.content || '',
-            coverIndex: item.coverIndex || (i + 1),
+            coverIndex: normalizeCoverIndex(item.coverIndex, i + 1),
             angle: item.angle || '模仿风格',
             coverReason: item.coverReason || '',
             reason: item.reason || '综合评估',
@@ -292,7 +305,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
           results.push({
             title,
             content,
-            coverIndex: i + 1,
+            coverIndex: normalizeCoverIndex(i + 1, i + 1),
             angle: getAngleFromText(text, i),
             coverReason: '',
             reason: getReasonFromText(text, i),
@@ -313,7 +326,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         results.push({
           title: titleLine.substring(0, 50) || `方案 ${i + 1}`,
           content: para.substring(0, 300),
-          coverIndex: i + 1,
+          coverIndex: normalizeCoverIndex(i + 1, i + 1),
           angle: getAngleFromText(text, i),
           coverReason: '',
           reason: getReasonFromText(text, i),
@@ -431,12 +444,18 @@ export default function Generator({ userId, username, library, onDataChange }) {
             placeholder="例如：温馨、高级感、母婴感、孕照"
             className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all"
           />
-          <p className="text-gray-400 text-sm mt-2">多个关键词用逗号分隔</p>
+          <p className="text-gray-400 text-sm mt-2">多个关键词用逗号分隔；可不填，不填时 AI 不会考虑关键词</p>
+        </div>
+
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">2. 上传候选封面图片</label>
+          <p className="text-gray-400 text-sm mb-3">最多上传 50 张，AI 会按内容吸引力、点击欲望和爆款潜力挑选 4 张封面</p>
+          <ImageUploader images={images} onImagesChange={setImages} />
         </div>
 
         {/* 参考来源选择 */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-3">2. 选择文案参考来源</label>
+          <label className="block text-sm font-medium text-gray-700 mb-3">3. 选择文案参考来源</label>
           
           {/* 参考来源类型选择 */}
           <div className="grid grid-cols-2 gap-3 mb-4">
@@ -597,6 +616,12 @@ export default function Generator({ userId, username, library, onDataChange }) {
         {error && (
           <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl text-sm">
             {error}
+          </div>
+        )}
+
+        {loadingStatus && (
+          <div className="mb-6 p-4 bg-pink-50 text-pink-600 rounded-xl text-sm">
+            {loadingStatus}
           </div>
         )}
 
