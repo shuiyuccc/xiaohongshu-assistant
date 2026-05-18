@@ -60,6 +60,8 @@ class XiaoHongShuScraper:
         self.existing_note_urls: Set[str] = set()
         self.existing_note_titles: Set[str] = set()
         self.skipped_existing_count = 0
+        self.candidate_notes_count = 0
+        self.processing_failed_count = 0
         self.new_notes_count = 0  # 已处理的新笔记数量
         self.excel_suffix = excel_suffix  # Excel 文件名后缀（如日期）
         self.history_output_dir = history_output_dir
@@ -674,8 +676,13 @@ class XiaoHongShuScraper:
             or len(self.existing_note_urls) > 0
             or len(self.existing_note_titles) > 0
         )
+        target_candidates = None
+        if self.max_notes:
+            # 多收集一些候选，避免“收集到 3 条卡片，但详情页只成功 1 条”时直接结束。
+            target_candidates = max(self.max_notes * 3, self.max_notes + 5)
+
         if is_incremental:
-            print(f"\n[增量爬取] 开始滚动收集新笔记（目标：{self.max_notes} 条新笔记）...")
+            print(f"\n[增量爬取] 开始滚动收集新笔记（目标成功保存：{self.max_notes} 条）...")
             print(f"[增量爬取] 已存在 {len(self.existing_note_ids)} 条笔记，将自动跳过")
         else:
             print("\n开始滚动收集所有笔记信息...")
@@ -692,9 +699,9 @@ class XiaoHongShuScraper:
         skipped_count = 0
         
         for attempt in range(max_scroll_attempts):
-            # 检查是否已收集足够的新笔记
-            if self.max_notes and len(all_notes_info) >= self.max_notes:
-                print(f"✓ 已收集足够的新笔记（{len(all_notes_info)} 条），停止滚动")
+            # 检查是否已收集足够候选。实际写入 Excel 和保存文件夹发生在详情页处理成功/失败之后。
+            if target_candidates and len(all_notes_info) >= target_candidates:
+                print(f"✓ 已收集足够候选笔记（{len(all_notes_info)} 条），停止滚动")
                 break
             
             # 获取当前页面所有笔记元素
@@ -739,21 +746,9 @@ class XiaoHongShuScraper:
                 # 是新笔记，添加到列表
                 all_notes_info.append(info)
                 current_new_count += 1
-                
-                # 添加到Excel（检查重复）
-                self._add_note_to_excel(
-                    len(all_notes_info), 
-                    info['title'], 
-                    "",  # 内容稍后获取
-                    "",  # 点赞数稍后获取
-                    "",  # 收藏数稍后获取
-                    "",  # 评论数稍后获取
-                    info['note_id'], 
-                    info['url']
-                )
-                
-                # 检查是否已收集足够
-                if self.max_notes and len(all_notes_info) >= self.max_notes:
+
+                # 检查是否已收集足够候选
+                if target_candidates and len(all_notes_info) >= target_candidates:
                     break
             
             # 每10次滚动输出进度
@@ -787,6 +782,7 @@ class XiaoHongShuScraper:
             time.sleep(scroll_pause_time)
         
         self.skipped_existing_count = skipped_count
+        self.candidate_notes_count = len(all_notes_info)
         return all_notes_info
     
     def _process_all_notes(self, profile_url: str) -> List[NoteData]:
@@ -810,64 +806,75 @@ class XiaoHongShuScraper:
             print("⚠️ 未收集到任何新笔记信息（可能都已存在）")
             return all_notes
 
-        print(f"\n✓ 共收集到 {len(notes_info)} 篇新笔记，开始处理...")
-        
-        # 重新滚动到顶部
-        print("滚动回顶部，开始处理...")
-        self.page.evaluate("window.scrollTo(0, 0)")
-        time.sleep(1)
-        
-        # 根据Excel记录遍历处理每篇笔记
+        print(f"\n✓ 共收集到 {len(notes_info)} 篇候选新笔记，开始处理...")
+
+        target_success_count = self.max_notes if self.max_notes and self.max_notes > 0 else None
+        attempted_count = 0
+        failed_count = 0
+
+        # 遍历候选笔记，直到成功保存数量达到用户输入的数量。
         for i, note_info in enumerate(notes_info):
+            if target_success_count and len(all_notes) >= target_success_count:
+                print(f"✓ 已成功保存 {len(all_notes)} 条笔记，达到目标数量，停止处理候选")
+                break
+
             title = note_info['title']
-            
-            # 检查是否已处理过
-            if title in self.processed_titles and i < len(self.processed_titles):
-                # 检查Excel中的状态
-                try:
-                    wb = load_workbook(self.excel_file)
-                    ws = wb.active
-                    for row in ws.iter_rows(min_row=2, values_only=True):
-                        if row[1] == title and row[8] == "已完成":
-                            print(f"  跳过已处理: {title[:30]}...")
-                            continue
-                except:
-                    pass
-            
+            attempted_count += 1
+
             print(f"\n{'=' * 60}")
-            print(f"正在处理第 {i+1}/{len(notes_info)} 篇笔记")
+            if target_success_count:
+                print(f"正在处理候选第 {i+1}/{len(notes_info)} 篇，目标成功保存 {len(all_notes) + 1}/{target_success_count} 条")
+            else:
+                print(f"正在处理第 {i+1}/{len(notes_info)} 篇笔记")
             print(f"标题: {title[:50]}...")
             print(f"{'=' * 60}")
-            
-            # 在主页找到并点击该帖子
-            note_elements = self._get_all_note_elements()
-            target_element = None
-            
-            for elem in note_elements:
-                info = self._get_note_info_from_element(elem)
-                if info and info['title'] == title:
-                    target_element = elem
-                    break
-            
-            if not target_element:
-                print(f"⚠️ 未找到帖子: {title[:30]}...，跳过")
-                continue
-            
-            # 滚动到元素可见
-            target_element.scroll_into_view_if_needed()
-            time.sleep(0.5)
-            
-            # 点击帖子
-            print(f"正在点击帖子...")
-            if not self._click_element(target_element):
-                print(f"⚠️ 点击帖子失败，跳过")
-                continue
-            
-            # 获取帖子详情
-            note_data = self._extract_note_detail(note_info['url'], i + 1)
+
+            self._add_note_to_excel(
+                attempted_count,
+                title,
+                "",
+                "",
+                "",
+                "",
+                note_info.get('note_id', ''),
+                note_info.get('url', ''),
+                "处理中"
+            )
+
+            note_data = None
+            note_url = note_info.get('url', '')
+
+            if note_url:
+                try:
+                    print("正在打开笔记详情页...")
+                    self._navigate_to_page(note_url)
+                    note_data = self._extract_note_detail(note_url, len(all_notes) + 1)
+                except Exception as e:
+                    print(f"⚠️ 直接打开笔记失败: {e}")
+
+            # 兜底：如果直接打开失败，再回主页定位卡片点击。
+            if not note_data:
+                try:
+                    print("尝试返回主页，通过卡片点击打开...")
+                    self._navigate_to_page(profile_url)
+                    note_elements = self._get_all_note_elements()
+                    target_element = None
+
+                    for elem in note_elements:
+                        info = self._get_note_info_from_element(elem)
+                        if info and info['title'] == title:
+                            target_element = elem
+                            break
+
+                    if target_element and self._click_element(target_element):
+                        note_data = self._extract_note_detail(note_url, len(all_notes) + 1)
+                except Exception as e:
+                    print(f"⚠️ 兜底点击笔记失败: {e}")
+
             if note_data:
+                note_data.index = len(all_notes) + 1
                 all_notes.append(note_data)
-                self._save_note(note_data, i + 1)
+                self._save_note(note_data, note_data.index)
                 # 更新Excel中的完整信息（包括准确的标题）
                 self._update_note_status(
                     title,
@@ -879,13 +886,14 @@ class XiaoHongShuScraper:
                     new_title=note_data.title  # 传入准确的标题
                 )
             else:
+                failed_count += 1
                 self._update_note_status(title, "处理失败")
-            
-            # 关闭详情页（如果不是最后一个帖子）
-            if i < len(notes_info) - 1:
-                if not self._close_note_detail():
-                    print("⚠️ 关闭详情页失败，返回主页重新获取...")
-                    self._navigate_to_page(profile_url)
+
+        self.new_notes_count = len(all_notes)
+        self.processing_failed_count = failed_count
+
+        if target_success_count and len(all_notes) < target_success_count:
+            print(f"⚠️ 目标保存 {target_success_count} 条，实际成功 {len(all_notes)} 条，失败 {failed_count} 条，可能是页面加载、登录态或笔记链接失效导致")
         
         return all_notes
     
@@ -1294,13 +1302,60 @@ class XiaoHongShuScraper:
         return stats
     
     def _save_note(self, note: NoteData, index: int) -> None:
-        """保存笔记信息（仅更新Excel，不创建文件夹）"""
-        # 只保存到Excel，不创建文件夹和下载图片
+        """保存笔记信息和图片到本次运行目录。"""
         print(f"\n笔记信息已保存到Excel: {note.title[:50] if note.title else '无标题'}...")
         print(f"  - 图片数量: {len(note.images)}")
         print(f"  - 内容长度: {len(note.content)} 字符")
         print(f"  - 点赞: {note.likes} | 收藏: {note.collects} | 评论: {note.comments}")
-        print(f"✓ 笔记处理完成（仅Excel）")
+
+        note_key = note.note_id or f"note_{index:03d}"
+        note_dir = os.path.join(self.output_dir, "notes", self._sanitize_filename(note_key))
+        images_dir = os.path.join(note_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        downloaded_images = []
+        if self.download_images and note.images:
+            downloaded_images = self._download_images(note.images, images_dir)
+            if downloaded_images:
+                first_image = downloaded_images[0]
+                _, ext = os.path.splitext(first_image)
+                cover_filename = f"cover{ext or '.jpg'}"
+                first_path = os.path.join(images_dir, first_image)
+                cover_path = os.path.join(images_dir, cover_filename)
+                if first_image != cover_filename and os.path.exists(first_path):
+                    if os.path.exists(cover_path):
+                        os.remove(cover_path)
+                    os.replace(first_path, cover_path)
+                    downloaded_images[0] = cover_filename
+
+        note_payload = {
+            "index": note.index,
+            "noteId": note.note_id,
+            "title": note.title,
+            "content": note.content,
+            "url": note.url,
+            "likes": note.likes,
+            "collects": note.collects,
+            "comments": note.comments,
+            "isVideo": note.is_video,
+            "imageUrls": note.images,
+            "downloadedImages": [f"images/{name}" for name in downloaded_images],
+            "coverImage": f"images/{downloaded_images[0]}" if downloaded_images else "",
+        }
+
+        with open(os.path.join(note_dir, "note.json"), "w", encoding="utf-8") as f:
+            json.dump(note_payload, f, ensure_ascii=False, indent=2)
+
+        markdown = self._generate_markdown(note, downloaded_images)
+        if downloaded_images:
+            markdown += "\n## 本地图片\n\n"
+            for image_index, filename in enumerate(downloaded_images, 1):
+                markdown += f"{image_index}. ![]({os.path.join('images', filename).replace(os.sep, '/')})\n"
+
+        with open(os.path.join(note_dir, "article.md"), "w", encoding="utf-8") as f:
+            f.write(markdown)
+
+        print(f"✓ 笔记文件夹已保存: {note_dir}")
     
     def _download_images(self, image_urls: List[str], folder_path: str) -> List[str]:
         """下载图片"""

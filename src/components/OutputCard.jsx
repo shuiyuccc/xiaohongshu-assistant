@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 
-export default function OutputCard({ item, index, images }) {
+export default function OutputCard({ item, index, images, onRefreshTitle, onRefreshContent }) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState(item.title || '')
+  const [refreshingTitle, setRefreshingTitle] = useState(false)
+  const [refreshingContent, setRefreshingContent] = useState(false)
   const titleInputRef = useRef(null)
 
   useEffect(() => {
@@ -42,6 +44,33 @@ export default function OutputCard({ item, index, images }) {
     if (event.key === 'Escape') {
       event.preventDefault()
       cancelTitleEdit()
+    }
+  }
+
+  const handleRefreshTitle = async () => {
+    if (!onRefreshTitle || refreshingTitle) return
+    setRefreshingTitle(true)
+    try {
+      const newTitle = await onRefreshTitle(item, index)
+      if (newTitle) {
+        item.title = newTitle
+        setTitleDraft(newTitle)
+      }
+    } finally {
+      setRefreshingTitle(false)
+    }
+  }
+
+  const handleRefreshContent = async () => {
+    if (!onRefreshContent || refreshingContent) return
+    setRefreshingContent(true)
+    try {
+      const newContent = await onRefreshContent(item, index)
+      if (newContent) {
+        item.content = newContent
+      }
+    } finally {
+      setRefreshingContent(false)
     }
   }
 
@@ -124,6 +153,28 @@ export default function OutputCard({ item, index, images }) {
                 </h3>
               </button>
             )}
+            {/* 刷新标题按钮 */}
+            {onRefreshTitle && (
+              <button
+                type="button"
+                onClick={handleRefreshTitle}
+                disabled={refreshingTitle}
+                aria-label="刷新标题"
+                title="换一组标题"
+                className="mt-0.5 h-6 w-6 shrink-0 rounded-full text-gray-400 hover:bg-pink-100 hover:text-pink-500 transition-colors flex items-center justify-center"
+              >
+                {refreshingTitle ? (
+                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+              </button>
+            )}
             {item.content && (
               <button
                 type="button"
@@ -147,6 +198,32 @@ export default function OutputCard({ item, index, images }) {
           {/* 展开后的文案与详细信息 */}
           {expanded && (
             <div className="space-y-2 border-t border-gray-100 pt-2">
+              {/* 文案标题栏 */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-500">文案内容</span>
+                {/* 刷新文案按钮 */}
+                {onRefreshContent && (
+                  <button
+                    type="button"
+                    onClick={handleRefreshContent}
+                    disabled={refreshingContent}
+                    aria-label="刷新文案"
+                    title="换一组文案"
+                    className="h-6 w-6 rounded-full text-gray-400 hover:bg-pink-100 hover:text-pink-500 transition-colors flex items-center justify-center"
+                  >
+                    {refreshingContent ? (
+                      <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                      </svg>
+                    ) : (
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
               {item.content && (
                 <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
                   {item.content}

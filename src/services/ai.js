@@ -229,12 +229,13 @@ export async function analyzeInfluencerStyle(library) {
 }
 
 // 生成文案
-export async function generateContent(images, keywords, library, theme, referenceSource = 'all', bloggerStyleProfile = null) {
+export async function generateContent(images, keywords, library, theme, referenceSource = 'all', bloggerStyleProfile = null, bloggerCoverStyleProfile = null, options = {}) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('请先配置 API Key')
 
   const baseUrl = getBaseUrl()
   const hasImages = images.length > 0
+  const { refreshTitle, refreshContent, refreshIndex } = options
 
   // 图片内容构建（最多发送50张给AI，对应上传上限）
   const imagesToSend = images.slice(0, MAX_IMAGES_FOR_AI)
@@ -277,6 +278,11 @@ export async function generateContent(images, keywords, library, theme, referenc
 【该博主风格总结】
 ${styleProfile}
 
+${bloggerCoverStyleProfile ? `【该博主封面风格总结】
+${bloggerCoverStyleProfile}
+
+` : ''}
+
 【仿写要求】
 - 模仿标题的句式、长度、标点、情绪强度、口语感和小红书钩子方式
 - 模仿正文的段落节奏、换行习惯、表达顺序、语气词、emoji 和话题标签习惯
@@ -312,6 +318,7 @@ ${styleProfile}
 3. 重点观察主体辨识度、人物表情/动作、情绪张力、构图、光线、色彩、场景信息量和小红书首页缩略图下的可读性
 4. 4张封面要有差异化：不同构图、不同场景、不同情绪，不要选太相似的图
 5. 封面编号必须是1-${imagesToSend.length}之间的数字
+${bloggerCoverStyleProfile ? '6. 必须优先参考「该博主封面风格总结」来判断哪些图片更像这位博主会选的封面，并在 coverReason 里说明对应依据' : ''}
 
 【生成优先级】
 1. 首先参考你选中的那张封面图片内容：标题和正文要能解释、放大或承接这张图的画面情绪与内容
@@ -378,14 +385,18 @@ ${styleProfile}
   }
 ]`
 
+  const refreshInstruction = (refreshTitle || refreshContent)
+    ? `\n【刷新要求】正在刷新第 ${(refreshIndex || 0) + 1} 组，请生成4组全新内容（与"${refreshTitle || refreshContent?.substring(0, 20)}..."不同），但只需返回包含4个元素的完整JSON数组（复用原有解析逻辑）：`
+    : ''
+
   const prompt = `你是小红书摄影内容专家。${imageInstruction}
 
 主题：${theme}
 
 ${libraryContext}
+${refreshInstruction}
 
-【内容生成要求】
-必须生成4组完全不同的内容！4组之间要有明显差异：
+【内容生成要求】${refreshInstruction ? '必须生成4组全新内容，第1组要与原来的有显著差异（标题不同、句式不同、角度不同）：' : '必须生成4组完全不同的内容！4组之间要有明显差异：'}
 1. 如果有封面图，标题和正文必须先围绕该组 coverIndex 对应图片的画面内容、情绪、场景和爆款潜力来写
 2. 标题要像参考博主会写的新标题，但不能和任何原标题一模一样
 3. 正文要像参考博主会写的新正文，但不能连续照搬原文完整句子
