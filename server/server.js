@@ -10,9 +10,9 @@ import { chromium } from 'playwright-core'
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 
 // AI 配置（用于生成风格文件）
-const AI_API_KEY = process.env.AI_API_KEY || ''
-const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.deepseek.com'
-const AI_MODEL = process.env.AI_MODEL || 'deepseek-chat'
+const AI_API_KEY = process.env.AI_API_KEY || 'sk-74e76ce284da4367b6554a9eb4f10f97'
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+const AI_MODEL = process.env.AI_MODEL || 'qwen-vl-plus'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, '..')
