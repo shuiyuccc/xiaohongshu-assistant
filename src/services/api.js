@@ -90,6 +90,11 @@ export async function getBloggerStyle(name) {
   return request(`/xhs/bloggers/${encodeURIComponent(name)}/style`)
 }
 
+// 获取博主封面风格文件
+export async function getBloggerCoverStyle(name) {
+  return request(`/xhs/bloggers/${encodeURIComponent(name)}/cover-style`)
+}
+
 // 保存博主风格文件
 export async function saveBloggerStyle(name, style) {
   return request(`/xhs/bloggers/${encodeURIComponent(name)}/style`, {

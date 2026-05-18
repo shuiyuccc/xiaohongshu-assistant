@@ -26,6 +26,8 @@ const XHS_OUTPUT_DIR = path.join(PACHONG_DIR, 'xiaohongshu_notes')
 const PYTHON_BIN = process.env.PYTHON_BIN || process.env.PYTHON || 'python'
 const STYLE_PROFILE_JSON = 'style_profile.json'
 const STYLE_PROFILE_MD = 'style_profile.md'
+const COVER_STYLE_PROFILE_JSON = 'cover_style_profile.json'
+const COVER_STYLE_PROFILE_MD = 'cover_style_profile.md'
 
 app.use(cors())
 app.use(express.json())
@@ -383,7 +385,7 @@ function runPythonJson(scriptPath, args, timeoutMs = 60 * 1000) {
   })
 }
 
-function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = [] }) {
+function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = [], downloadMedia = false }) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(PACHONG_BRIDGE)) {
       reject(new Error(`未找到 Python 爬虫桥接脚本: ${PACHONG_BRIDGE}`))
@@ -407,6 +409,12 @@ function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = []
       '--login-wait',
       '180'
     ]
+
+    if (downloadMedia) {
+      args.push('--download-media')
+    } else {
+      args.push('--no-download-media')
+    }
 
     // 如果有已存在的 note_id，通过环境变量传递
     const env = {
@@ -464,7 +472,8 @@ function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = []
           bloggerName: parsed.bloggerName || '',
           sourceName: parsed.sourceName || parsed.bloggerName || sourceName,
           skippedCount: parsed.skippedCount || 0,
-          knownExistingCount: parsed.knownExistingCount || 0
+          knownExistingCount: parsed.knownExistingCount || 0,
+          notesDir: parsed.notesDir || ''
         })
       } catch (err) {
         reject(new Error(`爬虫结果解析失败: ${err.message}`))
@@ -525,6 +534,43 @@ function getBloggerDir(bloggerName, outputDir = '') {
 function getStyleFilePath(bloggerName, outputDir = '') {
   const bloggerDir = getBloggerDir(bloggerName, outputDir)
   return path.join(bloggerDir, STYLE_PROFILE_JSON)
+}
+
+function getCoverStyleFilePath(bloggerName, outputDir = '') {
+  const bloggerDir = getBloggerDir(bloggerName, outputDir)
+  return path.join(bloggerDir, COVER_STYLE_PROFILE_JSON)
+}
+
+function getImageMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase()
+  if (ext === '.png') return 'image/png'
+  if (ext === '.webp') return 'image/webp'
+  return 'image/jpeg'
+}
+
+function imageFileToDataUrl(filePath) {
+  const data = fs.readFileSync(filePath).toString('base64')
+  return `data:${getImageMimeType(filePath)};base64,${data}`
+}
+
+function getNoteFolders(bloggerDir) {
+  const notesDir = path.join(bloggerDir, 'notes')
+  if (!fs.existsSync(notesDir)) return []
+
+  return fs.readdirSync(notesDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(notesDir, entry.name))
+    .filter(noteDir => fs.existsSync(path.join(noteDir, 'note.json')))
+}
+
+function readNotePayload(noteDir) {
+  return JSON.parse(fs.readFileSync(path.join(noteDir, 'note.json'), 'utf-8'))
+}
+
+function getDownloadedImagePaths(noteDir, notePayload) {
+  return (notePayload.downloadedImages || [])
+    .map(relativePath => path.join(noteDir, relativePath))
+    .filter(filePath => fs.existsSync(filePath))
 }
 
 async function readAllExcelPosts(bloggerName) {
@@ -667,6 +713,196 @@ async function generateAndSaveBloggerStyle(bloggerName, posts, outputDir = '') {
   return saveBloggerStyleProfile({ bloggerName, posts: cleanPosts, style, source, outputDir })
 }
 
+async function analyzeNoteCover(noteDir) {
+  const analysisJsonPath = path.join(noteDir, 'cover_analysis.json')
+  const analysisMdPath = path.join(noteDir, 'cover_analysis.md')
+
+  if (fs.existsSync(analysisJsonPath)) {
+    return JSON.parse(fs.readFileSync(analysisJsonPath, 'utf-8'))
+  }
+
+  const note = readNotePayload(noteDir)
+  const imagePaths = getDownloadedImagePaths(noteDir, note).slice(0, 5)
+  if (imagePaths.length === 0) return null
+
+  let source = 'ai'
+  let analysis = ''
+
+  try {
+    const imageContents = imagePaths.map(filePath => ({
+      type: 'image_url',
+      image_url: { url: imageFileToDataUrl(filePath) }
+    }))
+
+    const prompt = `你是一名小红书封面图分析师。下面是一篇小红书笔记的图片组，图片1是原笔记使用的封面图，请对比图片1和后续图片，分析为什么博主会把图片1作为封面。
+
+笔记标题：${note.title || ''}
+笔记正文：${note.content || ''}
+
+请输出结构化分析：
+1. 封面图核心优势：主体、人物表情/动作、情绪张力、场景、构图、光线、色彩、缩略图辨识度。
+2. 为什么不是其他图片：逐张说明图片2、图片3等在封面吸引力上的弱点。
+3. 可复用封面规律：后续从用户上传图片里选封面时，应优先选择什么特征。
+4. 适合搭配的标题方向：给出2-3个方向，不要创作完整文案。
+
+只分析封面选择，不要改写正文。`
+
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              ...imageContents,
+              { type: 'text', text: prompt }
+            ]
+          }
+        ]
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`AI API 错误: ${response.status}`)
+    }
+
+    const data = await response.json()
+    analysis = data.choices[0].message.content
+  } catch (err) {
+    source = 'local-fallback'
+    analysis = `1. 封面图核心优势
+- 该笔记默认将第1张作为封面。后续选图时优先学习第1张相对其他图片在主体清晰、构图完整、光线氛围和缩略图辨识度上的优势。
+
+2. 为什么不是其他图片
+- 其他图片需要重点比较主体是否更弱、画面是否更杂、情绪是否不够直接、是否不适合承载标题。
+
+3. 可复用封面规律
+- 优先选择主体明确、情绪直接、画面干净、有光线记忆点、能在小红书信息流缩略图中一眼看懂的图片。`
+    console.error('[封面分析] 单篇分析失败，使用兜底:', err)
+  }
+
+  const payload = {
+    noteId: note.noteId || path.basename(noteDir),
+    title: note.title || '',
+    imageCount: imagePaths.length,
+    coverImage: note.coverImage || '',
+    analysis,
+    source,
+    updatedAt: new Date().toISOString()
+  }
+
+  fs.writeFileSync(analysisJsonPath, JSON.stringify(payload, null, 2), 'utf-8')
+  fs.writeFileSync(
+    analysisMdPath,
+    `# 封面选择分析
+
+- 笔记：${payload.title}
+- 图片数：${payload.imageCount}
+- 生成方式：${source === 'ai' ? 'AI 分析' : '本地兜底分析'}
+- 更新时间：${payload.updatedAt}
+
+${analysis}
+`,
+    'utf-8'
+  )
+
+  return payload
+}
+
+async function generateBloggerCoverStyle(bloggerName, outputDir = '') {
+  const bloggerDir = getBloggerDir(bloggerName, outputDir)
+  const noteFolders = getNoteFolders(bloggerDir)
+  if (noteFolders.length === 0) return null
+
+  const analyses = []
+  for (const noteDir of noteFolders) {
+    const analysis = await analyzeNoteCover(noteDir)
+    if (analysis) analyses.push(analysis)
+  }
+
+  if (analyses.length === 0) return null
+
+  const analysisText = analyses.map((item, index) => {
+    return `【笔记${index + 1}】${item.title}
+${item.analysis}`
+  }).join('\n\n')
+
+  let source = 'ai'
+  let style = ''
+
+  try {
+    const prompt = `你是一名小红书封面策略分析师。请基于下面这位博主多篇笔记的封面选择分析，总结出可用于后续从用户上传图片中选择封面的「封面风格规律」。
+
+请重点总结：
+1. 这个博主倾向选择什么样的图片做封面：人物、场景、情绪、构图、光线、色彩、主体距离。
+2. 这些封面为什么更容易让人点进去。
+3. 后续用户上传多张图片时，应该按什么优先级选封面。
+4. 哪类图片应该避免选为封面。
+
+${analysisText}
+
+输出控制在 900 字以内，只输出封面风格总结。`
+
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`AI API 错误: ${response.status}`)
+    }
+
+    const data = await response.json()
+    style = data.choices[0].message.content
+  } catch (err) {
+    source = 'local-fallback'
+    style = `【封面风格规律】
+- 优先选择主体清晰、人物或关键场景一眼可辨认的图片。
+- 优先选择有情绪张力、光线记忆点、画面干净、适合小红书缩略图阅读的图片。
+- 如果多张图片都好看，优先选更能承接标题钩子、更有故事感或更有点击好奇心的一张。
+- 避免选择主体太小、画面太杂、光线过暗且没有情绪点、裁切后信息不完整的图片。`
+    console.error('[封面分析] 博主封面风格汇总失败，使用兜底:', err)
+  }
+
+  const payload = {
+    bloggerName,
+    style,
+    noteCount: analyses.length,
+    source,
+    updatedAt: new Date().toISOString()
+  }
+
+  const jsonPath = path.join(bloggerDir, COVER_STYLE_PROFILE_JSON)
+  const mdPath = path.join(bloggerDir, COVER_STYLE_PROFILE_MD)
+  fs.writeFileSync(jsonPath, JSON.stringify(payload, null, 2), 'utf-8')
+  fs.writeFileSync(
+    mdPath,
+    `# ${bloggerName} 封面风格总结
+
+- 更新时间：${payload.updatedAt}
+- 参考笔记数：${payload.noteCount}
+- 生成方式：${source === 'ai' ? 'AI 分析' : '本地兜底分析'}
+
+${style}
+`,
+    'utf-8'
+  )
+
+  return { ...payload, jsonPath, mdPath }
+}
+
 // 读取博主风格文件
 app.get('/api/xhs/bloggers/:name/style', (req, res) => {
   const { name } = req.params
@@ -733,6 +969,29 @@ app.post('/api/xhs/bloggers/:name/style/generate', async (req, res) => {
         updatedAt: styleProfile.updatedAt
       }
     })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 读取博主封面风格文件
+app.get('/api/xhs/bloggers/:name/cover-style', (req, res) => {
+  const { name } = req.params
+  const coverStyleFilePath = getCoverStyleFilePath(name)
+
+  try {
+    if (fs.existsSync(coverStyleFilePath)) {
+      const content = fs.readFileSync(coverStyleFilePath, 'utf-8')
+      const coverStyleData = JSON.parse(content)
+      res.json({
+        exists: true,
+        style: coverStyleData.style,
+        noteCount: coverStyleData.noteCount,
+        updatedAt: coverStyleData.updatedAt
+      })
+    } else {
+      res.json({ exists: false, style: null })
+    }
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -925,7 +1184,7 @@ app.post('/api/xhs/scrape', async (req, res) => {
   if (!url) return res.status(400).json({ error: '缺少 url 参数' })
 
   try {
-    const result = await runPythonXhsScraper({ url, count, existingNoteIds })
+    const result = await runPythonXhsScraper({ url, count, existingNoteIds, downloadMedia: true })
     
     // 爬取完成后，基于该博主文件夹里的全部标题和正文同步生成/更新风格文件。
     if (result.bloggerName) {
@@ -952,6 +1211,18 @@ app.post('/api/xhs/scrape', async (req, res) => {
             updatedAt: styleProfile.updatedAt
           }
           console.log(`[风格文件] 已保存: ${styleProfile.jsonPath}`)
+        }
+
+        const coverStyleProfile = await generateBloggerCoverStyle(result.bloggerName, result.outputDir)
+        if (coverStyleProfile) {
+          result.coverStyleProfile = {
+            jsonPath: coverStyleProfile.jsonPath,
+            mdPath: coverStyleProfile.mdPath,
+            noteCount: coverStyleProfile.noteCount,
+            source: coverStyleProfile.source,
+            updatedAt: coverStyleProfile.updatedAt
+          }
+          console.log(`[封面风格文件] 已保存: ${coverStyleProfile.jsonPath}`)
         }
       } catch (err) {
         console.error('[风格文件] 生成失败:', err)
@@ -989,14 +1260,19 @@ app.get('/api/xhs/download/excel', (req, res) => {
   if (!name) return res.status(400).json({ error: '缺少 name 参数' })
 
   const bloggerDir = getBloggerDir(name)
-  const excelPath = path.join(bloggerDir, 'notes_index.xlsx')
 
-  if (!fs.existsSync(excelPath)) {
+  // 查找博主目录下的 xlsx 文件（可能有日期时间戳）
+  const files = fs.readdirSync(bloggerDir).filter(f => f.endsWith('.xlsx'))
+  if (files.length === 0) {
     return res.status(404).json({ error: '文件不存在' })
   }
 
+  // 取最新的 xlsx 文件
+  const excelFile = files.sort().at(-1)
+  const excelPath = path.join(bloggerDir, excelFile)
+
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name)}_notes_index.xlsx"`)
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(excelFile)}"`)
   fs.createReadStream(excelPath).pipe(res)
 })
 

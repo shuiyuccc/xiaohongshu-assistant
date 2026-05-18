@@ -1,8 +1,8 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import OutputCard from '../components/OutputCard'
 import ImageUploader from '../components/ImageUploader'
 import { generateContent, detectTheme, analyzeInfluencerStyle } from '../services/ai'
-import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, saveBloggerStyle, generateBloggerStyleFile } from '../services/api'
+import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, getBloggerCoverStyle, saveBloggerStyle, generateBloggerStyleFile } from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
   const [images, setImages] = useState([])
@@ -12,6 +12,9 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const [results, setResults] = useState([])
   const [error, setError] = useState('')
   const [detectedTheme, setDetectedTheme] = useState('')
+  const [lastFilteredLibrary, setLastFilteredLibrary] = useState([])
+  const [lastBloggerStyle, setLastBloggerStyle] = useState(null)
+  const [lastBloggerCoverStyle, setLastBloggerCoverStyle] = useState(null)
   
   // 参考来源选择
   const [referenceSource, setReferenceSource] = useState('influencer') // 'influencer' | 'viral'
@@ -173,6 +176,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
       // 根据选择的参考来源筛选素材库
       let filteredLibrary = []
       let bloggerStyleProfile = null
+      let bloggerCoverStyleProfile = null
       
       if (referenceSource === 'influencer' && selectedInfluencer) {
         const [sourceType, ...nameParts] = selectedInfluencer.split(':')
@@ -213,6 +217,15 @@ export default function Generator({ userId, username, library, onDataChange }) {
               }
             }
           }
+
+          try {
+            const coverStyleData = await getBloggerCoverStyle(influencerName)
+            if (coverStyleData.exists && coverStyleData.style) {
+              bloggerCoverStyleProfile = coverStyleData.style
+            }
+          } catch (e) {
+            console.error('读取博主封面风格文件失败:', e)
+          }
         } else {
           filteredLibrary = library.filter(item => item.source === influencerName && item.type === 'influencer')
         }
@@ -223,9 +236,14 @@ export default function Generator({ userId, username, library, onDataChange }) {
 
       // 生成内容
       setLoadingStatus(images.length > 0 ? 'AI 正在挑选封面并生成文案...' : 'AI 正在生成文案...')
-      const response = await generateContent(images, keywords.trim(), filteredLibrary, theme, referenceSource, bloggerStyleProfile)
+      const response = await generateContent(images, keywords.trim(), filteredLibrary, theme, referenceSource, bloggerStyleProfile, bloggerCoverStyleProfile)
       const parsedResults = parseAIResponse(response)
       setResults(parsedResults)
+
+      // 保存本次素材和风格，供刷新使用
+      setLastFilteredLibrary(filteredLibrary)
+      setLastBloggerStyle(bloggerStyleProfile)
+      setLastBloggerCoverStyle(bloggerCoverStyleProfile)
 
       // 保存到服务器
       try {
@@ -246,6 +264,58 @@ export default function Generator({ userId, username, library, onDataChange }) {
       setLoadingStatus('')
     }
   }
+
+  // 刷新单个标题
+  const handleRefreshTitle = useCallback(async (item, index) => {
+    if (!selectedInfluencer) return null
+    setLoading(true)
+    setLoadingStatus(`正在刷新第 ${index + 1} 组标题...`)
+    try {
+      const [/* sourceType */, ...nameParts] = selectedInfluencer.split(':')
+      const influencerName = nameParts.join(':')
+      const bloggerStyle = await getBloggerStyle(influencerName)
+      const styleProfile = bloggerStyle.exists ? bloggerStyle.style : null
+
+      // 传入当前标题，让AI避免生成相似的
+      const response = await generateContent(images, keywords, lastFilteredLibrary, detectedTheme || '婚礼跟拍', referenceSource, styleProfile || lastBloggerStyle, lastBloggerCoverStyle, { refreshTitle: item.title, refreshIndex: index })
+      const parsed = parseAIResponse(response)
+      // 刷新时AI返回4个结果，取对应index的项
+      const newItem = Array.isArray(parsed) ? (parsed[index] || parsed[0]) : parsed
+      setLoadingStatus('')
+      return newItem && newItem.title ? newItem.title : null
+    } catch (err) {
+      setLoadingStatus('')
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [images, keywords, selectedInfluencer, referenceSource, detectedTheme, lastFilteredLibrary, lastBloggerStyle, lastBloggerCoverStyle])
+
+  // 刷新单个文案
+  const handleRefreshContent = useCallback(async (item, index) => {
+    if (!selectedInfluencer) return null
+    setLoading(true)
+    setLoadingStatus(`正在刷新第 ${index + 1} 组文案...`)
+    try {
+      const [/* sourceType */, ...nameParts] = selectedInfluencer.split(':')
+      const influencerName = nameParts.join(':')
+      const bloggerStyle = await getBloggerStyle(influencerName)
+      const styleProfile = bloggerStyle.exists ? bloggerStyle.style : null
+
+      // 传入当前文案，让AI避免生成相似的
+      const response = await generateContent(images, keywords, lastFilteredLibrary, detectedTheme || '婚礼跟拍', referenceSource, styleProfile || lastBloggerStyle, lastBloggerCoverStyle, { refreshContent: item.content, refreshIndex: index })
+      const parsed = parseAIResponse(response)
+      // 刷新时AI返回4个结果，取对应index的项
+      const newItem = Array.isArray(parsed) ? (parsed[index] || parsed[0]) : parsed
+      setLoadingStatus('')
+      return newItem && newItem.content ? newItem.content : null
+    } catch (err) {
+      setLoadingStatus('')
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [images, keywords, selectedInfluencer, referenceSource, detectedTheme, lastFilteredLibrary, lastBloggerStyle, lastBloggerCoverStyle])
 
   const parseAIResponse = (text) => {
     const normalizeCoverIndex = (value, fallback) => {
@@ -664,7 +734,14 @@ export default function Generator({ userId, username, library, onDataChange }) {
           <h3 className="text-lg font-bold text-gray-800 mb-4">生成结果（4组文案）</h3>
           <div className="grid grid-cols-2 gap-4">
             {results.map((item, index) => (
-              <OutputCard key={index} item={item} index={index} images={images} />
+              <OutputCard
+                key={index}
+                item={item}
+                index={index}
+                images={images}
+                onRefreshTitle={handleRefreshTitle}
+                onRefreshContent={handleRefreshContent}
+              />
             ))}
           </div>
         </div>

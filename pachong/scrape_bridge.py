@@ -93,6 +93,28 @@ def _parse_article_md(article_path: Path):
 
 def _read_generated_note_folders(run_dir: Path):
     posts = []
+    for note_json_path in sorted(run_dir.glob("notes/*/note.json")):
+        try:
+            data = json.loads(note_json_path.read_text(encoding="utf-8"))
+            downloaded = data.get("downloadedImages") or []
+            cover = data.get("coverImage") or (downloaded[0] if downloaded else (data.get("imageUrls") or [""])[0])
+            posts.append({
+                "id": data.get("noteId") or note_json_path.parent.name,
+                "noteId": data.get("noteId") or note_json_path.parent.name,
+                "title": data.get("title", ""),
+                "content": data.get("content", ""),
+                "url": data.get("url", ""),
+                "likes": data.get("likes", ""),
+                "collects": data.get("collects", ""),
+                "comments": data.get("comments", ""),
+                "images": data.get("imageUrls") or [],
+                "videos": [],
+                "cover": cover,
+                "isVideo": bool(data.get("isVideo")),
+            })
+        except Exception:
+            continue
+
     for article_path in sorted(run_dir.glob("note_*/article.md")):
         post = _parse_article_md(article_path)
         if post["title"] or post["content"]:
@@ -177,6 +199,24 @@ def run(args):
         import shutil
         shutil.move(scraper.excel_file, target_excel)
         print(f"✓ Excel 已移动到: {target_excel}")
+
+    # 移动本次笔记图片/正文文件夹到博主专属文件夹
+    temp_notes_dir = temp_dir / "notes"
+    target_notes_dir = blogger_dir / "notes"
+    if temp_notes_dir.exists():
+        target_notes_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        moved_count = 0
+        for note_dir in temp_notes_dir.iterdir():
+            if not note_dir.is_dir():
+                continue
+            target_note_dir = target_notes_dir / note_dir.name
+            if target_note_dir.exists():
+                time_str = datetime.now().strftime("%H%M%S")
+                target_note_dir = target_notes_dir / f"{note_dir.name}_{time_str}"
+            shutil.move(str(note_dir), str(target_note_dir))
+            moved_count += 1
+        print(f"✓ 笔记图片文件夹已移动到: {target_notes_dir}（{moved_count} 个）")
     
     # 清理临时目录
     import shutil
@@ -189,6 +229,9 @@ def run(args):
         "sourceName": blogger_name or args.source_name or args.url,
         "skippedCount": scraper.skipped_existing_count,
         "knownExistingCount": len(existing_note_ids),
+        "candidateCount": scraper.candidate_notes_count,
+        "failedCount": scraper.processing_failed_count,
+        "notesDir": str(blogger_dir / "notes"),
     }
 
 

@@ -224,7 +224,9 @@ export default function Library({ userId }) {
         throw new Error('未能爬取到帖子，请检查链接是否正确')
       }
 
-      setStatus(`爬取完成！共 ${result.posts.length} 条笔记，已生成 Excel 和风格文件`)
+      const coverMsg = result.coverStyleProfile ? '、封面风格文件' : ''
+      const failedMsg = result.failedCount ? `，另有 ${result.failedCount} 条候选处理失败` : ''
+      setStatus(`爬取完成！成功保存 ${result.posts.length} 条笔记${failedMsg}，已生成 Excel、写作风格文件${coverMsg}`)
 
       // 重新加载博主列表
       await loadBloggers()
