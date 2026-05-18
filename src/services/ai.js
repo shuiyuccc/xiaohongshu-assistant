@@ -85,7 +85,7 @@ function extractJsonArray(text) {
   const source = fenced ? fenced[1] : text
   const jsonMatch = source.match(/\[[\s\S]*\]/)
   if (!jsonMatch) throw new Error('AI 返回中没有 JSON 数组')
-  return JSON.parse(jsonMatch[0])
+  return JSON.parse(repairJsonStringLiterals(jsonMatch[0]))
 }
 
 function extractJsonObject(text) {
@@ -94,7 +94,46 @@ function extractJsonObject(text) {
   const source = fenced ? fenced[1] : text
   const jsonMatch = source.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('AI 返回中没有 JSON 对象')
-  return JSON.parse(jsonMatch[0])
+  return JSON.parse(repairJsonStringLiterals(jsonMatch[0]))
+}
+
+function repairJsonStringLiterals(source) {
+  let result = ''
+  let inString = false
+  let escaped = false
+
+  for (const char of source) {
+    if (escaped) {
+      result += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      result += char
+      escaped = true
+      continue
+    }
+
+    if (char === '"') {
+      result += char
+      inString = !inString
+      continue
+    }
+
+    if (inString && char === '\n') {
+      result += '\\n'
+      continue
+    }
+
+    if (inString && char === '\r') {
+      continue
+    }
+
+    result += char
+  }
+
+  return result
 }
 
 function chunkArray(items, size) {
@@ -360,6 +399,7 @@ ${bloggerCoverStyleProfile ? `【必须参考的博主 cover_style_profile】\n$
 ${profileText}
 
 只返回 JSON 数组，必须正好4个元素：
+注意：JSON 字符串内部如需换行，必须使用 \\n 转义，不要在字符串中直接换行。
 [
   {
     "imageId": "",
@@ -486,14 +526,10 @@ export async function refreshSingleGeneratedItem({ mode, item, imageProfile, key
   if (!imageProfile) throw new Error('缺少当前封面图片描述')
 
   const isTitle = mode === 'title'
-  const prompt = `你是小红书摄影内容编辑。请只刷新当前这一条${isTitle ? '标题' : '文案'}，不要生成其他帖子，不要改变封面图。
+  const prompt = `你是小红书摄影内容编辑。请只为当前这一条生成一个全新的${isTitle ? '标题' : '文案'}，不要生成其他帖子，不要改变封面图。
 
 【当前封面图片描述】
 ${summarizeImageProfile(imageProfile)}
-
-【当前内容】
-标题：${item.title || ''}
-正文：${item.content || ''}
 
 主题：${theme || '婚礼跟拍'}
 用户关键词：${keywords || '无'}
@@ -506,9 +542,11 @@ ${bloggerStyleProfile || '暂无'}
 2. 必须参考博主的标题句式、正文节奏和语气。
 3. 必须自然融合关键词；没有关键词就不要硬写。
 4. 不要返回4组，不要换封面。
-5. ${isTitle ? '只改标题，正文保持原方向；新标题要和旧标题明显不同。' : '只改正文，标题保持原方向；新文案要和旧文案明显不同。'}
+5. 不要参考或复述当前已有标题、正文，也不要延续旧内容的表达方式。
+6. ${isTitle ? '只返回一个全新的标题。' : '只返回一段全新的正文文案。'}
 
 只返回 JSON 对象：
+注意：JSON 字符串内部如需换行，必须使用 \\n 转义，不要在字符串中直接换行。
 ${isTitle ? '{"title": "新标题"}' : '{"content": "新文案"}'}`
 
   const response = await chat([{ role: 'user', content: prompt }])

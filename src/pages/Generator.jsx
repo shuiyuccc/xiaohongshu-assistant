@@ -176,12 +176,51 @@ export default function Generator({ userId, username, library, onDataChange }) {
     const jsonMatch = source?.match(/\[[\s\S]*\]/)
     if (!jsonMatch) return []
     try {
-      const parsed = JSON.parse(jsonMatch[0])
+      const parsed = JSON.parse(repairJsonStringLiterals(jsonMatch[0]))
       return Array.isArray(parsed) ? parsed : []
     } catch (err) {
       console.error('解析生成结果失败:', err)
       return []
     }
+  }
+
+  const repairJsonStringLiterals = (source) => {
+    let result = ''
+    let inString = false
+    let escaped = false
+
+    for (const char of source) {
+      if (escaped) {
+        result += char
+        escaped = false
+        continue
+      }
+
+      if (char === '\\') {
+        result += char
+        escaped = true
+        continue
+      }
+
+      if (char === '"') {
+        result += char
+        inString = !inString
+        continue
+      }
+
+      if (inString && char === '\n') {
+        result += '\\n'
+        continue
+      }
+
+      if (inString && char === '\r') {
+        continue
+      }
+
+      result += char
+    }
+
+    return result
   }
 
   const normalizeGeneratedResultsFromProfiles = (responseText, selectedProfiles) => {
@@ -418,9 +457,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         appendGenerationSessionPrompts(lastSessionId, [{
           ...(refreshed.promptMeta || {}),
           prompt: refreshed.prompt,
-          response: refreshed.response,
-          oldTitle: item.title,
-          oldContent: item.content
+          response: refreshed.response
         }]).catch(err => console.error('保存刷新标题提示词失败:', err))
       }
       if (newTitle) {
@@ -458,9 +495,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         appendGenerationSessionPrompts(lastSessionId, [{
           ...(refreshed.promptMeta || {}),
           prompt: refreshed.prompt,
-          response: refreshed.response,
-          oldTitle: item.title,
-          oldContent: item.content
+          response: refreshed.response
         }]).catch(err => console.error('保存刷新文案提示词失败:', err))
       }
       if (newContent) {
