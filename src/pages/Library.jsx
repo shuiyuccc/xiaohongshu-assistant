@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { addToLibrary as addToLibraryAPI, removeFromLibrary as removeFromLibraryAPI, getXhsSession, startQrLogin, getQrLoginStatus, scrapeInfluencer as scrapeInfluencerAPI, searchViral, getExistingNoteIds } from '../services/api'
-import { analyzeViral } from '../services/ai'
+import {
+  getXhsSession,
+  startQrLogin,
+  getQrLoginStatus,
+  scrapeInfluencer as scrapeInfluencerAPI,
+  getExcelBloggers,
+  getBloggerStyle
+} from '../services/api'
 
 function QrModal({ onSuccess, onClose }) {
   const [qrImage, setQrImage] = useState('')
@@ -68,219 +74,163 @@ function QrModal({ onSuccess, onClose }) {
   )
 }
 
-function PostCard({ post, index }) {
-  const [expanded, setExpanded] = useState(false)
-  return (
-    <div className="border border-gray-100 rounded-2xl overflow-hidden">
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50 transition-colors"
-      >
-        <div className="flex-1 min-w-0">
-          <span className="text-xs text-pink-500 font-medium mr-2">#{index + 1}</span>
-          <span className="font-medium text-gray-800 truncate">{post.originalTitle || `帖子 ${index + 1}`}</span>
-        </div>
-        <svg className={`w-4 h-4 text-gray-400 flex-shrink-0 ml-2 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+// 博主卡片组件
+function BloggerCard({ blogger, onDownloadExcel, onDownloadStyle }) {
+  const [styleData, setStyleData] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-      {expanded && (
-        <div className="px-4 pb-4 space-y-3 text-sm border-t border-gray-100">
-          {(post.likes || post.collects || post.comments) && (
-            <div className="pt-3 flex flex-wrap gap-2 text-xs text-gray-500">
-              {post.likes && <span className="px-2 py-1 bg-gray-50 rounded-full">点赞 {post.likes}</span>}
-              {post.collects && <span className="px-2 py-1 bg-gray-50 rounded-full">收藏 {post.collects}</span>}
-              {post.comments && <span className="px-2 py-1 bg-gray-50 rounded-full">评论 {post.comments}</span>}
-            </div>
+  useEffect(() => {
+    async function loadStyle() {
+      try {
+        const data = await getBloggerStyle(blogger.name)
+        setStyleData(data)
+      } catch (err) {
+        console.error('加载风格文件失败:', err)
+      }
+    }
+    loadStyle()
+  }, [blogger.name])
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-bold text-gray-800">{blogger.name}</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            共 {blogger.postCount} 条笔记 · 更新于 {new Date(blogger.lastUpdated).toLocaleDateString()}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="px-3 py-1 bg-blue-50 text-blue-600 text-xs rounded-full">
+            Excel
+          </span>
+          {styleData?.exists && (
+            <span className="px-3 py-1 bg-green-50 text-green-600 text-xs rounded-full">
+              风格文件
+            </span>
           )}
-          {post.originalContent && (
-            <div className={post.likes || post.collects || post.comments ? '' : 'pt-3'}>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">原文案</p>
-              <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{post.originalContent}</p>
+        </div>
+      </div>
+
+      {/* 文件列表 */}
+      <div className="space-y-2 mb-4">
+        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
             </div>
-          )}
-          {post.titleAnalysis && (
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">标题分析</p>
-              <p className="text-gray-700">{post.titleAnalysis}</p>
+              <p className="text-sm font-medium text-gray-800">notes_index.xlsx</p>
+              <p className="text-xs text-gray-500">Excel 数据表格</p>
             </div>
-          )}
-          {post.titleStyle && (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">标题风格</p>
-              <p className="text-gray-700">{post.titleStyle}</p>
+          </div>
+          <button
+            onClick={() => onDownloadExcel(blogger.name)}
+            className="px-4 py-2 bg-pink-500 text-white text-sm rounded-lg hover:bg-pink-600 transition-colors"
+          >
+            下载
+          </button>
+        </div>
+
+        {styleData?.exists && (
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-800">style_profile.md</p>
+                <p className="text-xs text-gray-500">写作风格文件</p>
+              </div>
             </div>
-          )}
-          {post.contentAnalysis && (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">文案分析</p>
-              <p className="text-gray-700">{post.contentAnalysis}</p>
-            </div>
-          )}
-          {post.contentStyle && (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">文案风格</p>
-              <p className="text-gray-700">{post.contentStyle}</p>
-            </div>
-          )}
-          {post.coverAnalysis && (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">封面分析</p>
-              <p className="text-gray-700">{post.coverAnalysis}</p>
-            </div>
-          )}
-          {post.viralReason && (
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase mb-1">爆款原因</p>
-              <p className="text-gray-700">{post.viralReason}</p>
-            </div>
-          )}
+            <button
+              onClick={() => onDownloadStyle(blogger.name, 'md')}
+              className="px-4 py-2 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 transition-colors"
+            >
+              下载
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 风格预览 */}
+      {styleData?.exists && styleData.style && (
+        <div className="border-t border-gray-100 pt-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase mb-2">写作风格</p>
+          <p className="text-sm text-gray-600 line-clamp-3">{styleData.style}</p>
         </div>
       )}
     </div>
   )
 }
 
-export default function Library({ userId, username, library, onDataChange }) {
-  const [activeTab, setActiveTab] = useState('influencer')
+export default function Library({ userId }) {
+  const [activeTab, setActiveTab] = useState('scrape') // 'scrape' | 'list'
   const [url, setUrl] = useState('')
   const [count, setCount] = useState(10)
-  const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [loggedIn, setLoggedIn] = useState(false)
   const [nickname, setNickname] = useState('')
   const [showQr, setShowQr] = useState(false)
-  const [results, setResults] = useState([])
-  const pendingAnalyzeRef = useRef(null)
+  const [bloggers, setBloggers] = useState([])
+  const [loadingBloggers, setLoadingBloggers] = useState(false)
+
+  // 加载博主列表
+  useEffect(() => {
+    loadBloggers()
+  }, [])
 
   useEffect(() => {
     getXhsSession().then(data => setLoggedIn(data.loggedIn)).catch(() => {})
   }, [])
 
+  async function loadBloggers() {
+    setLoadingBloggers(true)
+    try {
+      const data = await getExcelBloggers()
+      if (data.bloggers) {
+        setBloggers(data.bloggers)
+      }
+    } catch (err) {
+      console.error('加载博主列表失败:', err)
+    } finally {
+      setLoadingBloggers(false)
+    }
+  }
+
   const handleQrSuccess = (nick) => {
     setLoggedIn(true)
     setNickname(nick)
     setShowQr(false)
-    if (pendingAnalyzeRef.current === 'influencer') {
-      pendingAnalyzeRef.current = null
-      doScrapeAndAnalyze()
-    } else if (pendingAnalyzeRef.current === 'viral') {
-      pendingAnalyzeRef.current = null
-      doAnalyzeViral({ skipLoginCheck: true })
-    }
   }
 
-  const parseResult = (raw, fallbackPosts) => {
-    const enrichWithRawPost = (post, index) => {
-      const rawPost = fallbackPosts[index] || {}
-      return {
-        ...post,
-        originalTitle: post.originalTitle || rawPost.title || '',
-        originalContent: post.originalContent || rawPost.content || '',
-        originalCover: post.originalCover || rawPost.cover || '',
-        originalUrl: post.originalUrl || rawPost.url || '',
-        likes: post.likes ?? rawPost.likes ?? 0,
-        collects: post.collects ?? rawPost.collects ?? 0,
-        comments: post.comments ?? rawPost.comments ?? 0
-      }
-    }
-
-    try {
-      const jsonMatch = raw.match(/```json\n([\s\S]*?)\n```|(\{[\s\S]*\})/)
-      const parsed = jsonMatch ? JSON.parse(jsonMatch[1] || jsonMatch[2]) : JSON.parse(raw)
-      const posts = Array.isArray(parsed.posts) ? parsed.posts : [parsed]
-      return posts.map(enrichWithRawPost)
-    } catch {
-      return fallbackPosts.map((p, index) => enrichWithRawPost({}, index))
-    }
-  }
-
-  const doScrapeAndAnalyze = async () => {
+  const doScrape = async () => {
     if (!url.trim()) { setError('请输入博主链接'); return }
 
     setError('')
-    setResults([])
     setLoading(true)
-    setStatus('正在检查已存在的笔记...')
+    setStatus('正在爬取博主数据...')
 
     try {
-      // 先获取该博主已存在的 note_id 列表（用于增量爬取）
-      let existingNoteIds = []
-      try {
-        const existingData = await getExistingNoteIds(userId, url)
-        existingNoteIds = existingData.noteIds || []
-        if (existingNoteIds.length > 0) {
-          setStatus(`发现已存在 ${existingNoteIds.length} 条笔记，将自动跳过...`)
-        }
-      } catch (e) {
-        console.log('获取已存在笔记失败，继续爬取:', e)
-      }
+      const result = await scrapeInfluencerAPI(url, count, [])
 
-      setStatus('正在爬取博主主页...')
-      const { posts: rawPosts, sourceName, skippedCount, styleProfile, styleProfileError } = await scrapeInfluencerAPI(url, count, existingNoteIds)
-      
-      if (!rawPosts || rawPosts.length === 0) {
-        if (styleProfile) {
-          setResults([])
-          setStatus(`没有新笔记需要存入素材库，但已根据该博主 Excel 生成 style_profile.md/json（参考 ${styleProfile.postCount} 条素材）`)
-          onDataChange && onDataChange()
-          return
-        }
-        if (skippedCount > 0) {
-          throw new Error(`该博主的所有笔记都已存在（共跳过 ${skippedCount} 条），无需重复爬取`)
-        }
+      if (!result.posts || result.posts.length === 0) {
         throw new Error('未能爬取到帖子，请检查链接是否正确')
       }
 
-      const bloggerName = sourceName || url
-      const posts = rawPosts.map(post => ({
-        ...post,
-        sourceName: bloggerName,
-        originalTitle: post.title || '',
-        originalContent: post.content || '',
-        originalCover: post.cover || '',
-        likes: post.likes || 0,
-        collects: post.collects || 0,
-        comments: post.comments || 0
-      }))
+      setStatus(`爬取完成！共 ${result.posts.length} 条笔记，已生成 Excel 和风格文件`)
 
-      setResults(posts)
-      const skipMsg = skippedCount > 0 ? `（跳过 ${skippedCount} 条已存在）` : ''
-      setStatus(`爬取完成，共 ${posts.length} 篇新笔记${skipMsg}，正在存入素材库...`)
+      // 重新加载博主列表
+      await loadBloggers()
 
-      for (const post of posts) {
-        try {
-          await addToLibraryAPI(userId, {
-            type: 'influencer',
-            source: bloggerName,
-            noteId: post.id || post.noteId || '',
-            originalCover: post.originalCover || '',
-            originalTitle: post.originalTitle || '',
-            originalContent: post.originalContent || '',
-            likes: post.likes || 0,
-            collects: post.collects || 0,
-            comments: post.comments || 0,
-            coverAnalysis: post.coverAnalysis || '',
-            titleAnalysis: post.titleAnalysis || '',
-            contentAnalysis: post.contentAnalysis || '',
-            titleStyle: post.titleStyle || '',
-            contentStyle: post.contentStyle || ''
-          })
-        } catch (e) {
-          console.error('添加素材失败:', e)
-        }
-      }
-
-      const styleMsg = styleProfile
-        ? `，风格文件已生成：style_profile.md/json（参考 ${styleProfile.postCount} 条素材）`
-        : styleProfileError
-          ? `，但风格文件生成失败：${styleProfileError}`
-          : ''
-      setStatus(`爬取完成，${posts.length} 条新标题已存入素材库${skipMsg}${styleMsg}`)
-      onDataChange && onDataChange()
+      // 切换到列表页查看新爬取的博主
+      setActiveTab('list')
     } catch (err) {
       setError(err.message)
       setStatus('')
@@ -289,78 +239,56 @@ export default function Library({ userId, username, library, onDataChange }) {
     }
   }
 
-  const handleAnalyzeInfluencer = () => {
-    if (!url.trim()) { setError('请输入博主链接'); return }
-    setError('')
-    doScrapeAndAnalyze()
-  }
-
-  const doAnalyzeViral = async ({ skipLoginCheck = false } = {}) => {
-    if (!keyword.trim()) { setError('请输入分析需求'); return }
-    setError('')
-
-    if (!skipLoginCheck && !loggedIn) { pendingAnalyzeRef.current = 'viral'; setShowQr(true); return }
-
-    setResults([])
-    setLoading(true)
-    setStatus('正在搜索小红书爆款帖子...')
-
+  // 下载 Excel 文件
+  const downloadExcel = async (bloggerName) => {
     try {
-      const { posts: rawPosts } = await searchViral(keyword, 5)
-      if (!rawPosts || rawPosts.length === 0) throw new Error('未搜索到相关帖子，请换个关键词试试')
+      const response = await fetch(`http://localhost:3001/api/xhs/download/excel?name=${encodeURIComponent(bloggerName)}`)
+      if (!response.ok) throw new Error('下载失败')
 
-      setStatus(`找到 ${rawPosts.length} 篇帖子，正在 AI 分析爆款规律...`)
-      const aiResult = await analyzeViral(rawPosts)
-      const posts = parseResult(aiResult, rawPosts)
-
-      setResults(posts)
-      setStatus(`分析完成，共 ${posts.length} 篇，正在存入素材库...`)
-
-      for (const post of posts) {
-        try {
-          await addToLibraryAPI(userId, {
-            type: 'viral',
-            source: keyword,
-            originalCover: post.originalCover || '',
-            originalTitle: post.originalTitle || '',
-            originalContent: post.originalContent || '',
-            likes: post.likes || 0,
-            collects: post.collects || 0,
-            comments: post.comments || 0,
-            coverAnalysis: post.coverAnalysis || '',
-            titleAnalysis: post.titleAnalysis || '',
-            contentAnalysis: post.contentAnalysis || '',
-            titleStyle: post.titleStyle || '',
-            contentStyle: post.contentStyle || ''
-          })
-        } catch (e) {
-          console.error('添加素材失败:', e)
-        }
-      }
-
-      setStatus(`分析完成，${posts.length} 条已存入素材库`)
-      onDataChange && onDataChange()
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${bloggerName}_notes_index.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
     } catch (err) {
-      setError(err.message)
-      setStatus('')
-    } finally {
-      setLoading(false)
+      alert('下载失败: ' + err.message)
     }
   }
 
-  const handleAnalyzeViral = () => {
-    doAnalyzeViral()
+  // 下载风格文件
+  const downloadStyle = async (bloggerName, format) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/xhs/download/style?name=${encodeURIComponent(bloggerName)}&format=${format}`)
+      if (!response.ok) throw new Error('下载失败')
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${bloggerName}_style_profile.${format}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      alert('下载失败: ' + err.message)
+    }
   }
 
   return (
-    <div className="max-w-2xl mx-auto py-8 px-4">
-      {showQr && <QrModal onSuccess={handleQrSuccess} onClose={() => { setShowQr(false); pendingAnalyzeRef.current = null }} />}
+    <div className="max-w-4xl mx-auto py-8 px-4">
+      {showQr && <QrModal onSuccess={handleQrSuccess} onClose={() => setShowQr(false)} />}
 
+      {/* 页面标题 */}
       <div className="mb-8">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">素材库</h2>
-            <p className="text-gray-500">学习博主风格，分析爆款内容</p>
+            <h2 className="text-2xl font-bold text-gray-800 mb-2">素材爬取</h2>
+            <p className="text-gray-500">爬取小红书博主内容，生成 Excel 数据表和写作风格文件</p>
           </div>
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${loggedIn ? 'bg-green-400' : 'bg-gray-300'}`} />
@@ -376,24 +304,24 @@ export default function Library({ userId, username, library, onDataChange }) {
         </div>
       </div>
 
-      {/* Tab */}
+      {/* Tab 切换 */}
       <div className="flex gap-2 mb-6">
         <button
-          onClick={() => { setActiveTab('influencer'); setResults([]); setStatus(''); setError('') }}
-          className={`px-4 py-2 rounded-lg font-medium transition-all ${activeTab === 'influencer' ? 'bg-pink-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
+          onClick={() => { setActiveTab('scrape'); setStatus(''); setError('') }}
+          className={`px-4 py-2 rounded-lg font-medium transition-all ${activeTab === 'scrape' ? 'bg-pink-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
         >
           爬取博主
         </button>
         <button
-          onClick={() => { setActiveTab('viral'); setResults([]); setStatus(''); setError('') }}
-          className={`px-4 py-2 rounded-lg font-medium transition-all ${activeTab === 'viral' ? 'bg-pink-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
+          onClick={() => { setActiveTab('list'); setStatus(''); setError('') }}
+          className={`px-4 py-2 rounded-lg font-medium transition-all ${activeTab === 'list' ? 'bg-pink-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
         >
-          爆款分析
+          已爬取列表 ({bloggers.length})
         </button>
       </div>
 
-      {/* 爬取博主 */}
-      {activeTab === 'influencer' && (
+      {/* 爬取博主页面 */}
+      {activeTab === 'scrape' && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">博主主页链接</label>
@@ -407,8 +335,7 @@ export default function Library({ userId, username, library, onDataChange }) {
           </div>
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              爬取新帖子数量
-              <span className="text-xs text-gray-500 font-normal ml-2">（已存在的会自动跳过）</span>
+              爬取帖子数量
             </label>
             <input
               type="number"
@@ -419,103 +346,57 @@ export default function Library({ userId, username, library, onDataChange }) {
               className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all"
             />
             <p className="text-gray-400 text-xs mt-2">
-              例如：博主有 300 条笔记，你已爬 100 条，填 200 即可爬取剩余全部
+              建议首次爬取 10-20 条，后续会自动跳过已存在的笔记
             </p>
           </div>
           {error && <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-xl text-sm">{error}</div>}
-          {status && <div className="mb-4 p-4 bg-blue-50 text-blue-600 rounded-xl text-sm">{status}</div>}
+          {status && <div className="mb-4 p-4 bg-green-50 text-green-600 rounded-xl text-sm">{status}</div>}
           <button
-            onClick={handleAnalyzeInfluencer}
+            onClick={doScrape}
             disabled={loading}
             className="w-full py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-medium rounded-xl hover:from-pink-600 hover:to-rose-600 transition-all shadow-lg shadow-pink-200 disabled:opacity-50"
           >
-            {loading ? '爬取中...' : '开始爬取并列出标题'}
+            {loading ? '爬取中...' : '开始爬取'}
           </button>
         </div>
       )}
 
-      {/* 爆款分析 */}
-      {activeTab === 'viral' && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">爆款分析需求</label>
-            <input
-              type="text"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              placeholder="例如：孕照拍摄，近半年点赞最高的帖子"
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-pink-400 focus:ring-2 focus:ring-pink-100 outline-none transition-all"
-            />
-          </div>
-          {error && <div className="mb-4 p-4 bg-red-50 text-red-600 rounded-xl text-sm">{error}</div>}
-          {status && <div className="mb-4 p-4 bg-blue-50 text-blue-600 rounded-xl text-sm">{status}</div>}
-          <button
-            onClick={handleAnalyzeViral}
-            disabled={loading}
-            className="w-full py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-medium rounded-xl hover:from-pink-600 hover:to-rose-600 transition-all shadow-lg shadow-pink-200 disabled:opacity-50"
-          >
-            {loading ? '分析中...' : loggedIn ? '开始搜索并分析' : '扫码登录后分析'}
-          </button>
-        </div>
-      )}
-
-      {/* 分析/爬取结果 */}
-      {results.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">
-            {activeTab === 'influencer' ? `爬取结果（${results.length} 篇）` : `分析结果（${results.length} 篇）`}
-          </h3>
-          {activeTab === 'influencer' ? (
-            <div className="space-y-2">
-              {results.map((post, i) => (
-                <div key={i} className="p-3 bg-gray-50 rounded-xl text-sm text-gray-700">
-                  {(post.sourceName || url)} - {post.originalTitle || post.title || `帖子 ${i + 1}`}
-                </div>
-              ))}
+      {/* 已爬取列表页面 */}
+      {activeTab === 'list' && (
+        <div>
+          {loadingBloggers ? (
+            <div className="text-center py-12">
+              <div className="w-8 h-8 border-2 border-pink-400 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-gray-500">加载中...</p>
+            </div>
+          ) : bloggers.length === 0 ? (
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
+              <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium text-gray-800 mb-2">暂无爬取记录</h3>
+              <p className="text-gray-500 mb-4">还没有爬取过任何博主，快去爬取第一个博主吧！</p>
+              <button
+                onClick={() => setActiveTab('scrape')}
+                className="px-6 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors"
+              >
+                去爬取
+              </button>
             </div>
           ) : (
-            <div className="space-y-3">
-              {results.map((post, i) => (
-                <PostCard key={i} post={post} index={i} />
+            <div className="space-y-4">
+              {bloggers.map((blogger) => (
+                <BloggerCard
+                  key={blogger.name}
+                  blogger={blogger}
+                  onDownloadExcel={downloadExcel}
+                  onDownloadStyle={downloadStyle}
+                />
               ))}
             </div>
           )}
-        </div>
-      )}
-
-      {/* 素材库历史列表 */}
-      {library && library.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">已存素材（{library.length} 条）</h3>
-          <div className="space-y-3">
-            {library.map((item) => (
-              <div key={item.id} className="flex items-start justify-between p-4 bg-gray-50 rounded-xl">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${item.type === 'influencer' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
-                      {item.type === 'influencer' ? '博主' : '爆款'}
-                    </span>
-                    <span className="text-sm text-gray-500 truncate">{item.source}</span>
-                  </div>
-                  <p className="text-gray-800 font-medium truncate">{item.originalTitle || item.titleStyle}</p>
-                  {item.titleStyle && <p className="text-sm text-gray-500 mt-1">风格：{item.titleStyle}</p>}
-                  {(item.likes || item.collects || item.comments) && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      点赞 {item.likes || 0} · 收藏 {item.collects || 0} · 评论 {item.comments || 0}
-                    </p>
-                  )}
-                </div>
-                <button
-                  onClick={() => removeFromLibraryAPI(item.id).then(() => onDataChange && onDataChange())}
-                  className="ml-3 p-2 text-gray-400 hover:text-red-500 transition-colors flex-shrink-0"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>

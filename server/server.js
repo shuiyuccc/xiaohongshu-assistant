@@ -983,6 +983,42 @@ app.post('/api/xhs/search', async (req, res) => {
 })
 
 
+// 下载博主 Excel 文件
+app.get('/api/xhs/download/excel', (req, res) => {
+  const { name } = req.query
+  if (!name) return res.status(400).json({ error: '缺少 name 参数' })
+
+  const bloggerDir = getBloggerDir(name)
+  const excelPath = path.join(bloggerDir, 'notes_index.xlsx')
+
+  if (!fs.existsSync(excelPath)) {
+    return res.status(404).json({ error: '文件不存在' })
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name)}_notes_index.xlsx"`)
+  fs.createReadStream(excelPath).pipe(res)
+})
+
+// 下载博主风格文件
+app.get('/api/xhs/download/style', (req, res) => {
+  const { name, format = 'md' } = req.query
+  if (!name) return res.status(400).json({ error: '缺少 name 参数' })
+
+  const bloggerDir = getBloggerDir(name)
+  const fileName = format === 'json' ? 'style_profile.json' : 'style_profile.md'
+  const filePath = path.join(bloggerDir, fileName)
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '文件不存在' })
+  }
+
+  const contentType = format === 'json' ? 'application/json' : 'text/markdown'
+  res.setHeader('Content-Type', contentType)
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(name)}_style_profile.${format}"`)
+  fs.createReadStream(filePath).pipe(res)
+})
+
 // 启动服务器
 async function start() {
   await initDB()
