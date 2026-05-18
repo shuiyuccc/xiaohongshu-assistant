@@ -220,7 +220,7 @@ export default function Library({ userId, username, library, onDataChange }) {
       }
 
       setStatus('正在爬取博主主页...')
-      const { posts: rawPosts, sourceName, skippedCount } = await scrapeInfluencerAPI(url, count, existingNoteIds)
+      const { posts: rawPosts, sourceName, skippedCount, styleProfile, styleProfileError } = await scrapeInfluencerAPI(url, count, existingNoteIds)
       
       if (!rawPosts || rawPosts.length === 0) {
         if (skippedCount > 0) {
@@ -268,7 +268,12 @@ export default function Library({ userId, username, library, onDataChange }) {
         }
       }
 
-      setStatus(`爬取完成，${posts.length} 条新标题已存入素材库${skipMsg}`)
+      const styleMsg = styleProfile
+        ? `，风格文件已生成（参考 ${styleProfile.postCount} 条素材）`
+        : styleProfileError
+          ? `，但风格文件生成失败：${styleProfileError}`
+          : ''
+      setStatus(`爬取完成，${posts.length} 条新标题已存入素材库${skipMsg}${styleMsg}`)
       onDataChange && onDataChange()
     } catch (err) {
       setError(err.message)

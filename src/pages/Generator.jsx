@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import OutputCard from '../components/OutputCard'
 import ImageUploader from '../components/ImageUploader'
 import { generateContent, detectTheme, analyzeInfluencerStyle } from '../services/ai'
-import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, saveBloggerStyle } from '../services/api'
+import { addToHistory, getExcelBloggerPosts, getExcelBloggers, getBloggerStyle, saveBloggerStyle, generateBloggerStyleFile } from '../services/api'
 
 export default function Generator({ userId, username, library, onDataChange }) {
   const [images, setImages] = useState([])
@@ -198,13 +198,19 @@ export default function Generator({ userId, username, library, onDataChange }) {
             // 生成风格文件
             setLoadingStatus('首次分析该博主，正在生成风格文件...')
             try {
-              bloggerStyleProfile = await analyzeInfluencerStyle(filteredLibrary)
-              // 保存风格文件
-              await saveBloggerStyle(influencerName, bloggerStyleProfile)
+              const generatedStyle = await generateBloggerStyleFile(influencerName)
+              bloggerStyleProfile = generatedStyle.styleProfile?.style || ''
               setLoadingStatus('风格文件已保存，正在生成内容...')
             } catch (e) {
-              console.error('生成风格文件失败:', e)
-              setLoadingStatus('风格分析失败，直接生成内容...')
+              console.error('服务端生成风格文件失败，尝试前端兜底分析:', e)
+              try {
+                bloggerStyleProfile = await analyzeInfluencerStyle(filteredLibrary)
+                await saveBloggerStyle(influencerName, bloggerStyleProfile)
+                setLoadingStatus('风格文件已保存，正在生成内容...')
+              } catch (fallbackErr) {
+                console.error('生成风格文件失败:', fallbackErr)
+                setLoadingStatus('风格分析失败，直接生成内容...')
+              }
             }
           }
         } else {

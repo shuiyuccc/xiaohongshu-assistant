@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react'
-import Login from './components/Login'
 import Generator from './pages/Generator'
 import Library from './pages/Library'
-import { getOrCreateUser, getUserData } from './services/api'
 
 function SettingsModal({ open, onClose }) {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('ai_api_key') || '')
@@ -77,38 +75,8 @@ function SettingsModal({ open, onClose }) {
 }
 
 export default function App() {
-  const [user, setUser] = useState(null)
-  const [userId, setUserId] = useState(null)
   const [activeTab, setActiveTab] = useState('generate')
   const [showSettings, setShowSettings] = useState(false)
-  const [userData, setUserData] = useState(null)
-
-  const handleLogin = async (username) => {
-    try {
-      const userData = await getOrCreateUser(username)
-      setUser(username)
-      setUserId(userData.id)
-      loadUserData(userData.id)
-    } catch (err) {
-      console.error('登录失败:', err)
-      alert('连接服务器失败，请确保服务器已启动')
-    }
-  }
-
-  const loadUserData = async (uid) => {
-    try {
-      const data = await getUserData(uid)
-      setUserData(data)
-    } catch (err) {
-      console.error('获取数据失败:', err)
-    }
-  }
-
-  if (!user) {
-    return <Login onLogin={handleLogin} />
-  }
-
-  const library = userData?.library || []
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -135,7 +103,6 @@ export default function App() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </button>
-              <div className="text-sm text-gray-500">{user}</div>
             </div>
           </div>
 
@@ -159,7 +126,7 @@ export default function App() {
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
-              素材库 ({library.length})
+              素材库
             </button>
           </div>
         </div>
@@ -168,10 +135,10 @@ export default function App() {
       {/* Content */}
       <main className="max-w-2xl mx-auto px-4">
         <div className={activeTab === 'generate' ? 'block' : 'hidden'}>
-          <Generator userId={userId} username={user} library={library} onDataChange={() => loadUserData(userId)} />
+          <Generator />
         </div>
         <div className={activeTab === 'library' ? 'block' : 'hidden'}>
-          <Library userId={userId} username={user} library={library} onDataChange={() => loadUserData(userId)} />
+          <Library />
         </div>
       </main>
 

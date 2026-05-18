@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -72,27 +73,51 @@ def _read_posts(path, limit=None):
         workbook.close()
 
 
-def _latest_files_by_blogger(root):
-    latest = {}
+def _blogger_name_from_path(root, path):
+    root = Path(root).resolve()
+    path = Path(path).resolve()
+    if path.parent != root:
+        return path.parent.name
+
+    return re.sub(r"(_\d{8})(_\d{6})?$", "", path.stem)
+
+
+def _files_by_blogger(root):
+    grouped = {}
     for path in _iter_excel_files(root):
-        name = path.stem
-        current = latest.get(name)
-        if current is None or path.stat().st_mtime > current.stat().st_mtime:
-            latest[name] = path
-    return latest
+        name = _blogger_name_from_path(root, path)
+        grouped.setdefault(name, []).append(path)
+
+    for paths in grouped.values():
+        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    return grouped
+
+
+def _latest_files_by_blogger(root):
+    return {
+        name: paths[0]
+        for name, paths in _files_by_blogger(root).items()
+        if paths
+    }
 
 
 def list_bloggers(root):
     bloggers = []
-    for name, path in sorted(_latest_files_by_blogger(root).items()):
-        posts = _read_posts(path, limit=None)
+    for name, paths in sorted(_files_by_blogger(root).items()):
+        all_posts = []
+        latest_path = paths[0]
+        for path in paths:
+            all_posts.extend(_read_posts(path, limit=None))
+
         bloggers.append({
             "name": name,
-            "postCount": len(posts),
-            "modifiedAt": path.stat().st_mtime,
-            "fileName": path.name,
-            "runDir": path.parent.name,
-            "sampleTitles": [post["title"] for post in posts[:3] if post.get("title")],
+            "postCount": len(all_posts),
+            "modifiedAt": latest_path.stat().st_mtime,
+            "fileName": latest_path.name,
+            "runDir": latest_path.parent.name,
+            "fileCount": len(paths),
+            "sampleTitles": [post["title"] for post in all_posts[:3] if post.get("title")],
         })
     return {"bloggers": bloggers}
 
@@ -112,10 +137,9 @@ def _find_blogger_files(root, blogger_name):
         if excel_files:
             return excel_files
     
-    # 回退到旧逻辑：在根目录查找
-    latest = _latest_files_by_blogger(root)
-    path = latest.get(blogger_name)
-    return [path] if path else []
+    # 回退到旧逻辑：在根目录查找，并兼容去掉日期后缀后的博主名
+    grouped = _files_by_blogger(root)
+    return grouped.get(blogger_name, [])
 
 
 def read_blogger(root, name, limit):
@@ -157,14 +181,15 @@ def main():
     parser.add_argument("--mode", choices=["list", "read"], required=True)
     parser.add_argument("--output-dir", default="./xiaohongshu_notes")
     parser.add_argument("--name", default="")
-    parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--limit", default="30")
     args = parser.parse_args()
 
     try:
         if args.mode == "list":
             result = list_bloggers(args.output_dir)
         else:
-            result = read_blogger(args.output_dir, args.name, max(args.limit, 1))
+            limit = None if args.limit == "all" else max(int(args.limit), 1)
+            result = read_blogger(args.output_dir, args.name, limit)
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))

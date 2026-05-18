@@ -185,7 +185,7 @@ def run(args):
         "posts": posts,
         "outputDir": str(blogger_dir),
         "bloggerName": blogger_name,
-        "sourceName": args.source_name or blogger_name or args.url,
+        "sourceName": blogger_name or args.source_name or args.url,
         "skippedCount": len(existing_note_ids),
     }
 

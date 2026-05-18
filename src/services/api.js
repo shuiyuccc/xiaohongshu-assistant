@@ -98,6 +98,13 @@ export async function saveBloggerStyle(name, style) {
   })
 }
 
+// 基于已保存的 Excel 素材重新生成博主风格文件
+export async function generateBloggerStyleFile(name) {
+  return request(`/xhs/bloggers/${encodeURIComponent(name)}/style/generate`, {
+    method: 'POST'
+  })
+}
+
 export async function searchViral(keyword, count) {
   return request('/xhs/search', {
     method: 'POST',

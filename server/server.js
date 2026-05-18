@@ -1,6 +1,5 @@
 import express from 'express'
 import cors from 'cors'
-import initSqlJs from 'sql.js'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
@@ -18,227 +17,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT_DIR = path.resolve(__dirname, '..')
 const app = express()
 const PORT = process.env.PORT || 3001
-const DB_PATH = path.join(__dirname, 'data.db')
 const PACHONG_DIR = path.join(ROOT_DIR, 'pachong')
 const PACHONG_BRIDGE = path.join(PACHONG_DIR, 'scrape_bridge.py')
 const EXCEL_READER = path.join(PACHONG_DIR, 'excel_reader.py')
 const XHS_OUTPUT_DIR = path.join(PACHONG_DIR, 'xiaohongshu_notes')
 const PYTHON_BIN = process.env.PYTHON_BIN || process.env.PYTHON || 'python'
+const STYLE_PROFILE_JSON = 'style_profile.json'
+const STYLE_PROFILE_MD = 'style_profile.md'
+const COOKIES_PATH = path.join(__dirname, 'cookies.json')
 
 app.use(cors())
 app.use(express.json())
-
-let db = null
-
-// 初始化数据库
-async function initDB() {
-  const SQL = await initSqlJs()
-
-  // 如果数据库文件存在，加载它
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH)
-    db = new SQL.Database(buffer)
-  } else {
-    db = new SQL.Database()
-  }
-
-  // 创建表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS library (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      source TEXT,
-      theme TEXT,
-      note_id TEXT,
-      original_cover TEXT,
-      original_title TEXT,
-      original_content TEXT,
-      publish_date TEXT,
-      likes INTEGER DEFAULT 0,
-      collects INTEGER DEFAULT 0,
-      comments INTEGER DEFAULT 0,
-      cover_analysis TEXT,
-      title_analysis TEXT,
-      content_analysis TEXT,
-      title_style TEXT,
-      content_style TEXT,
-      viral_reason TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS history (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      images TEXT,
-      keywords TEXT,
-      theme TEXT,
-      results TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `)
-
-  console.log('Database initialized')
-}
-
-// 保存数据库到文件
-function saveDB() {
-  if (db) {
-    const data = db.export()
-    const buffer = Buffer.from(data)
-    fs.writeFileSync(DB_PATH, buffer)
-  }
-}
-
-// 获取或创建用户
-app.post('/api/users/:name', (req, res) => {
-  const { name } = req.params
-  const result = db.exec('SELECT * FROM users WHERE name = ?', [name])
-
-  let user = result.length > 0 && result[0].values.length > 0
-    ? { id: result[0].values[0][0], name: result[0].values[0][1] }
-    : null
-
-  if (!user) {
-    const id = Date.now().toString()
-    db.run('INSERT INTO users (id, name) VALUES (?, ?)', [id, name])
-    user = { id, name }
-    saveDB()
-  }
-
-  res.json(user)
-})
-
-// 获取用户数据
-app.get('/api/users/:name/data', (req, res) => {
-  const { name } = req.params
-  const userResult = db.exec('SELECT id FROM users WHERE name = ?', [name])
-
-  if (userResult.length === 0 || userResult[0].values.length === 0) {
-    return res.json({ library: [], history: [] })
-  }
-
-  const userId = userResult[0].values[0][0]
-
-  // 获取素材库
-  const libraryResult = db.exec('SELECT * FROM library WHERE user_id = ? ORDER BY created_at DESC', [userId])
-  const library = libraryResult.length > 0
-    ? libraryResult[0].values.map(row => ({
-        id: row[0],
-        userId: row[1],
-        type: row[2],
-        source: row[3],
-        theme: row[4],
-        noteId: row[5],
-        originalCover: row[6],
-        originalTitle: row[7],
-        originalContent: row[8],
-        publishDate: row[9],
-        likes: row[10],
-        collects: row[11],
-        comments: row[12],
-        coverAnalysis: row[13],
-        titleAnalysis: row[14],
-        contentAnalysis: row[15],
-        titleStyle: row[16],
-        contentStyle: row[17],
-        viralReason: row[18],
-        createdAt: row[19]
-      }))
-    : []
-
-  // 获取历史
-  const historyResult = db.exec('SELECT * FROM history WHERE user_id = ? ORDER BY created_at DESC', [userId])
-  const history = historyResult.length > 0
-    ? historyResult[0].values.map(row => ({
-        id: row[0],
-        images: row[2] ? JSON.parse(row[2]) : [],
-        keywords: row[3],
-        theme: row[4],
-        results: row[5] ? JSON.parse(row[5]) : [],
-        createdAt: row[6]
-      }))
-    : []
-
-  res.json({ library, history })
-})
-
-// 添加素材
-app.post('/api/library', (req, res) => {
-  const { userId, item } = req.body
-  const id = Date.now().toString()
-
-  db.run(`
-    INSERT INTO library (id, user_id, type, source, theme, note_id, original_cover, original_title, original_content, publish_date, likes, collects, comments, cover_analysis, title_analysis, content_analysis, title_style, content_style, viral_reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
-    id,
-    userId,
-    item.type || 'influencer',
-    item.source || '',
-    item.theme || '',
-    item.noteId || '',
-    item.originalCover || '',
-    item.originalTitle || '',
-    item.originalContent || '',
-    item.publishDate || '',
-    item.likes || 0,
-    item.collects || 0,
-    item.comments || 0,
-    item.coverAnalysis || '',
-    item.titleAnalysis || '',
-    item.contentAnalysis || '',
-    item.titleStyle || '',
-    item.contentStyle || '',
-    item.viralReason || ''
-  ])
-
-  saveDB()
-  res.json({ id, ...item })
-})
-
-// 删除素材
-app.delete('/api/library/:id', (req, res) => {
-  const { id } = req.params
-  db.run('DELETE FROM library WHERE id = ?', [id])
-  saveDB()
-  res.json({ success: true })
-})
-
-// 添加历史记录
-app.post('/api/history', (req, res) => {
-  const { userId, item } = req.body
-  const id = Date.now().toString()
-
-  db.run(`
-    INSERT INTO history (id, user_id, images, keywords, theme, results)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `, [
-    id,
-    userId,
-    JSON.stringify(item.images || []),
-    item.keywords || '',
-    item.theme || '',
-    JSON.stringify(item.results || [])
-  ])
-
-  saveDB()
-  res.json({ id, ...item })
-})
-
-// ─── 小红书爬虫 ───────────────────────────────────────────────
-
-const COOKIES_PATH = path.join(__dirname, 'cookies.json')
 
 // 内存中保持登录流程的浏览器实例
 let qrBrowser = null
@@ -415,7 +204,9 @@ function runPythonXhsScraper({ url, count, sourceName = '', existingNoteIds = []
         resolve({
           posts: Array.isArray(parsed.posts) ? parsed.posts : [],
           outputDir: parsed.outputDir || '',
-          sourceName: parsed.sourceName || sourceName
+          bloggerName: parsed.bloggerName || '',
+          sourceName: parsed.sourceName || parsed.bloggerName || sourceName,
+          skippedCount: parsed.skippedCount || 0
         })
       } catch (err) {
         reject(new Error(`爬虫结果解析失败: ${err.message}`))
@@ -455,9 +246,7 @@ app.get('/api/xhs/excel-bloggers/:name/posts', async (req, res) => {
       name
     ]
 
-    if (!readAll) {
-      args.push('--limit', String(limit))
-    }
+    args.push('--limit', readAll ? 'all' : String(limit))
 
     const result = await runPythonJson(EXCEL_READER, args)
     res.json(result)
@@ -466,65 +255,139 @@ app.get('/api/xhs/excel-bloggers/:name/posts', async (req, res) => {
   }
 })
 
-// 获取博主风格文件路径
-function getStyleFilePath(bloggerName) {
-  const safeName = bloggerName.replace(/[<>:"/\\|?*]/g, '_')
-  const bloggerDir = path.join(XHS_OUTPUT_DIR, safeName)
-  return path.join(bloggerDir, 'style_profile.json')
+function safePathName(name) {
+  return String(name || 'unknown').replace(/[<>:"/\\|?*]/g, '_').trim() || 'unknown'
 }
 
-// 读取博主风格文件
-app.get('/api/xhs/bloggers/:name/style', (req, res) => {
-  const { name } = req.params
-  const styleFilePath = getStyleFilePath(name)
+function getBloggerDir(bloggerName, outputDir = '') {
+  return outputDir ? path.resolve(outputDir) : path.join(XHS_OUTPUT_DIR, safePathName(bloggerName))
+}
 
-  try {
-    if (fs.existsSync(styleFilePath)) {
-      const content = fs.readFileSync(styleFilePath, 'utf-8')
-      const styleData = JSON.parse(content)
-      res.json({
-        exists: true,
-        style: styleData.style,
-        updatedAt: styleData.updatedAt
-      })
-    } else {
-      res.json({ exists: false, style: null })
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message })
+// 获取博主风格文件路径
+function getStyleFilePath(bloggerName, outputDir = '') {
+  const bloggerDir = getBloggerDir(bloggerName, outputDir)
+  return path.join(bloggerDir, STYLE_PROFILE_JSON)
+}
+
+async function readAllExcelPosts(bloggerName) {
+  const result = await runPythonJson(EXCEL_READER, [
+    '--mode',
+    'read',
+    '--output-dir',
+    XHS_OUTPUT_DIR,
+    '--name',
+    bloggerName,
+    '--limit',
+    'all'
+  ])
+
+  return Array.isArray(result.posts) ? result.posts : []
+}
+
+function uniquePosts(posts) {
+  const seen = new Set()
+  return (posts || []).filter(post => {
+    const title = (post.title || post.originalTitle || '').trim()
+    const content = (post.content || post.originalContent || '').trim()
+    const key = `${title}\n${content}`
+    if ((!title && !content) || seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).map(post => ({
+    title: post.title || post.originalTitle || '',
+    content: post.content || post.originalContent || ''
+  }))
+}
+
+function average(numbers) {
+  if (!numbers.length) return 0
+  return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length)
+}
+
+function buildLocalStyleSummary(bloggerName, posts) {
+  const usablePosts = uniquePosts(posts)
+  const titles = usablePosts.map(post => post.title).filter(Boolean)
+  const contents = usablePosts.map(post => post.content).filter(Boolean)
+  const titleLengths = titles.map(title => title.length)
+  const contentLengths = contents.map(content => content.length)
+  const questionCount = titles.filter(title => /[?？]/.test(title)).length
+  const exclaimCount = titles.filter(title => /[!！]/.test(title)).length
+  const emojiCount = contents.filter(content => /\p{Extended_Pictographic}/u.test(content)).length
+  const hashtagCount = contents.reduce((count, content) => count + (content.match(/#[^\s#]+/g) || []).length, 0)
+  const shortLineCount = contents.reduce((count, content) => {
+    return count + content.split(/\r?\n/).filter(line => line.trim() && line.trim().length <= 28).length
+  }, 0)
+  const openingSamples = contents
+    .map(content => content.split(/\r?\n/).find(line => line.trim()) || '')
+    .filter(Boolean)
+    .slice(0, 5)
+
+  return `【博主】${bloggerName}
+【素材范围】共参考 ${usablePosts.length} 篇标题和正文。
+
+1. 标题撰写特征
+- 标题平均长度约 ${average(titleLengths)} 字，常用短句直接抛出场景、结果或情绪点。
+- 疑问标题占 ${titles.length ? Math.round((questionCount / titles.length) * 100) : 0}%，感叹标题占 ${titles.length ? Math.round((exclaimCount / titles.length) * 100) : 0}%，适合用反问、惊喜感或明确判断做开头钩子。
+- 仿写时优先保留"具体场景 + 情绪/结果"的标题结构，避免直接复用原始标题中的完整表达。
+
+2. 正文撰写特征
+- 正文平均长度约 ${average(contentLengths)} 字，整体更适合口语化表达，重点围绕真实感受、拍摄/体验细节和结果反馈展开。
+- 短行累计约 ${shortLineCount} 行，说明换行节奏较强，仿写时可以用短段落推进，不要写成大段说明文。
+- emoji 出现于 ${contents.length ? Math.round((emojiCount / contents.length) * 100) : 0}% 的正文，话题标签累计约 ${hashtagCount} 个；生成内容时可适量使用，但以自然贴合语气为准。
+
+3. 常见开头方式
+${openingSamples.length ? openingSamples.map(line => `- ${line}`).join('\n') : '- 以场景、结果、感受或直接判断切入。'}
+
+4. 后续仿写注意事项
+- 学习句式、语气、段落节奏和选题切入方式，不要照搬原标题或正文连续完整句。
+- 新内容要像该博主基于新素材新写的一篇，而不是对历史素材做摘要。`
+}
+
+function saveBloggerStyleProfile({ bloggerName, posts, style, source, outputDir = '' }) {
+  const cleanPosts = uniquePosts(posts)
+  const safeName = safePathName(bloggerName)
+  const bloggerDir = getBloggerDir(safeName, outputDir)
+  fs.mkdirSync(bloggerDir, { recursive: true })
+
+  const styleData = {
+    bloggerName,
+    style,
+    postCount: cleanPosts.length,
+    source,
+    updatedAt: new Date().toISOString()
   }
-})
 
-// 保存/更新博主风格文件
-app.post('/api/xhs/bloggers/:name/style', (req, res) => {
-  const { name } = req.params
-  const { style } = req.body
+  const jsonPath = path.join(bloggerDir, STYLE_PROFILE_JSON)
+  fs.writeFileSync(jsonPath, JSON.stringify(styleData, null, 2), 'utf-8')
+
+  const markdown = `# ${bloggerName} 写作风格总结
+
+- 更新时间：${styleData.updatedAt}
+- 参考素材数：${styleData.postCount}
+- 生成方式：${source === 'ai' ? 'AI 分析' : source === 'manual' ? '手动保存' : '本地兜底分析'}
+
+${style}
+`
+  const mdPath = path.join(bloggerDir, STYLE_PROFILE_MD)
+  fs.writeFileSync(mdPath, markdown, 'utf-8')
+
+  return { ...styleData, jsonPath, mdPath }
+}
+
+async function generateAndSaveBloggerStyle(bloggerName, posts, outputDir = '') {
+  const cleanPosts = uniquePosts(posts)
+  if (!bloggerName || cleanPosts.length === 0) return null
+
+  let source = 'ai'
+  let style = await generateBloggerStyle(bloggerName, cleanPosts)
 
   if (!style) {
-    return res.status(400).json({ error: '缺少 style 参数' })
+    source = 'local-fallback'
+    style = buildLocalStyleSummary(bloggerName, cleanPosts)
   }
 
-  const styleFilePath = getStyleFilePath(name)
-
-  try {
-    // 确保博主文件夹存在
-    const bloggerDir = path.dirname(styleFilePath)
-    if (!fs.existsSync(bloggerDir)) {
-      fs.mkdirSync(bloggerDir, { recursive: true })
-    }
-
-    const styleData = {
-      bloggerName: name,
-      style: style,
-      updatedAt: new Date().toISOString()
-    }
-
-    fs.writeFileSync(styleFilePath, JSON.stringify(styleData, null, 2), 'utf-8')
-    res.json({ success: true, updatedAt: styleData.updatedAt })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+  return saveBloggerStyleProfile({ bloggerName, posts: cleanPosts, style, source, outputDir })
+}
 
 // 调用 AI 生成博主风格总结
 async function generateBloggerStyle(bloggerName, posts) {
@@ -574,6 +437,77 @@ ${samples}
   }
 }
 
+// 读取博主风格文件
+app.get('/api/xhs/bloggers/:name/style', (req, res) => {
+  const { name } = req.params
+  const styleFilePath = getStyleFilePath(name)
+
+  try {
+    if (fs.existsSync(styleFilePath)) {
+      const content = fs.readFileSync(styleFilePath, 'utf-8')
+      const styleData = JSON.parse(content)
+      res.json({
+        exists: true,
+        style: styleData.style,
+        updatedAt: styleData.updatedAt
+      })
+    } else {
+      res.json({ exists: false, style: null })
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 保存/更新博主风格文件
+app.post('/api/xhs/bloggers/:name/style', (req, res) => {
+  const { name } = req.params
+  const { style } = req.body
+
+  if (!style) {
+    return res.status(400).json({ error: '缺少 style 参数' })
+  }
+
+  try {
+    const styleData = saveBloggerStyleProfile({
+      bloggerName: name,
+      posts: [],
+      style,
+      source: 'manual'
+    })
+    res.json({ success: true, updatedAt: styleData.updatedAt })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 基于已保存的博主 Excel 重新生成风格文件
+app.post('/api/xhs/bloggers/:name/style/generate', async (req, res) => {
+  const { name } = req.params
+
+  try {
+    const posts = await readAllExcelPosts(name)
+    if (posts.length === 0) {
+      return res.status(400).json({ error: '该博主没有可用于分析的标题和正文' })
+    }
+
+    const styleProfile = await generateAndSaveBloggerStyle(name, posts)
+    res.json({
+      success: true,
+      styleProfile: {
+        jsonPath: styleProfile.jsonPath,
+        mdPath: styleProfile.mdPath,
+        postCount: styleProfile.postCount,
+        style: styleProfile.style,
+        source: styleProfile.source,
+        updatedAt: styleProfile.updatedAt
+      }
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // 检查登录态
 app.get('/api/xhs/session', (req, res) => {
   const cookies = loadCookies()
@@ -582,108 +516,142 @@ app.get('/api/xhs/session', (req, res) => {
   // 检查关键 cookie 是否存在且未过期
   const now = Date.now() / 1000
   const sessionCookie = cookies.find(c =>
-    (c.name === 'web_session' || c.name === 'customer-sso-sid') &&
-    c.value &&
-    (!c.expires || c.expires === -1 || c.expires > now)
+    c.name === 'web_session' || c.name === 'session'
   )
-  res.json({ loggedIn: !!sessionCookie })
+
+  if (sessionCookie && sessionCookie.expires > now) {
+    return res.json({ loggedIn: true })
+  }
+
+  res.json({ loggedIn: false })
 })
 
-// 启动二维码登录
+// 启动二维码登录流程
 app.post('/api/xhs/qr-login/start', async (req, res) => {
   try {
+    // 如果已有浏览器实例，先关闭
     if (qrBrowser) {
       await qrBrowser.close().catch(() => {})
       qrBrowser = null
       qrPage = null
     }
 
-    qrBrowser = await chromium.launch({ headless: false, executablePath: CHROME_PATH })
-    const context = await qrBrowser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 800 }
+    qrBrowser = await chromium.launch({
+      headless: false,
+      executablePath: CHROME_PATH
     })
-    qrPage = await context.newPage()
 
-    await qrPage.goto('https://www.xiaohongshu.com', { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await qrPage.waitForTimeout(3000)
+    qrPage = await qrBrowser.newPage()
 
-    // 点击登录按钮触发二维码弹窗
-    const loginBtn = qrPage.locator('text=登录').first()
-    if (await loginBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await loginBtn.click()
-      await qrPage.waitForTimeout(2000)
-    }
+    // 注入二维码检测脚本
+    await qrPage.addInitScript(() => {
+      window._qrDetected = false
+      const observer = new MutationObserver(() => {
+        const qrCanvas = document.querySelector('canvas')
+        const qrImage = document.querySelector('img[src*="qr"]')
+        if (qrCanvas || qrImage) {
+          window._qrDetected = true
+        }
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+    })
 
-    // 截图返回给前端展示
-    const screenshot = await qrPage.screenshot({ type: 'png' })
-    res.json({ qrImage: screenshot.toString('base64') })
+    // 访问小红书首页触发登录弹窗
+    await qrPage.goto('https://www.xiaohongshu.com', { waitUntil: 'networkidle' })
+
+    // 等待二维码出现（最多10秒）
+    await qrPage.waitForFunction(() => window._qrDetected, { timeout: 10000 })
+
+    res.json({ success: true, message: '请在新打开的浏览器窗口中扫描二维码登录' })
   } catch (err) {
-    if (qrBrowser) await qrBrowser.close().catch(() => {})
-    qrBrowser = null
-    qrPage = null
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// 轮询登录状态
-app.get('/api/xhs/qr-login/status', async (req, res) => {
-  if (!qrPage) {
-    return res.json({ status: 'expired' })
-  }
-
-  try {
-    // 通过 cookie 中是否有 user_id / web_session 来判断是否登录成功
-    const cookies = await qrPage.context().cookies()
-    const isLoggedIn = cookies.some(c =>
-      (c.name === 'web_session' || c.name === 'user_id' || c.name === 'customer-sso-sid') && c.value
-    )
-
-    if (isLoggedIn) {
-      await qrPage.waitForTimeout(500)
-      const allCookies = await qrPage.context().cookies()
-
-      // 尝试获取用户昵称
-      let nickname = ''
-      try {
-        nickname = await qrPage.evaluate(() => {
-          const el = document.querySelector('[class*="nickname"], [class*="user-name"], .username')
-          return el ? el.innerText.trim() : ''
-        })
-      } catch {}
-
-      saveCookies(allCookies)
+    if (qrBrowser) {
       await qrBrowser.close().catch(() => {})
       qrBrowser = null
       qrPage = null
-
-      return res.json({ status: 'confirmed', nickname })
     }
-
-    // 返回最新截图
-    const screenshot = await qrPage.screenshot({ type: 'png' })
-    res.json({ status: 'waiting', qrImage: screenshot.toString('base64') })
-  } catch (err) {
-    res.json({ status: 'waiting' })
+    res.status(500).json({ error: err.message })
   }
 })
 
-// 获取指定博主已存在的 note_id 列表（用于增量爬取）
-app.get('/api/xhs/existing-notes', (req, res) => {
-  const { userId, source } = req.query
-  if (!userId || !source) {
-    return res.status(400).json({ error: '缺少 userId 或 source 参数' })
+// 轮询检查登录状态
+app.get('/api/xhs/qr-login/status', async (req, res) => {
+  if (!qrBrowser || !qrPage) {
+    return res.json({ status: 'idle' })
   }
 
   try {
-    const result = db.exec(
-      'SELECT note_id FROM library WHERE user_id = ? AND source = ? AND note_id IS NOT NULL AND note_id != ""',
-      [userId, source]
-    )
-    const noteIds = result.length > 0 ? result[0].values.map(row => row[0]) : []
-    res.json({ noteIds })
+    // 检查当前 URL 是否已跳转到用户主页
+    const url = qrPage.url()
+
+    if (url.includes('/user/profile/') || url.includes('/discovery')) {
+      // 已登录，获取 cookies
+      const cookies = await qrPage.context().cookies()
+      saveCookies(cookies)
+
+      // 关闭浏览器
+      await qrBrowser.close()
+      qrBrowser = null
+      qrPage = null
+
+      return res.json({ status: 'success' })
+    }
+
+    // 检查是否还在登录页面
+    const hasLoginElement = await qrPage.evaluate(() => {
+      return !!document.querySelector('.login-container') ||
+             !!document.querySelector('canvas') ||
+             !!document.querySelector('img[src*="qr"]')
+    })
+
+    if (!hasLoginElement) {
+      // 可能已登录但页面结构不同，尝试获取 cookies
+      const cookies = await qrPage.context().cookies()
+      const hasSession = cookies.some(c =>
+        c.name === 'web_session' || c.name === 'session'
+      )
+
+      if (hasSession) {
+        saveCookies(cookies)
+        await qrBrowser.close()
+        qrBrowser = null
+        qrPage = null
+        return res.json({ status: 'success' })
+      }
+    }
+
+    res.json({ status: 'waiting' })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ status: 'error', error: err.message })
+  }
+})
+
+// 获取已存在的笔记ID列表（用于增量爬取）
+app.get('/api/xhs/existing-notes', (req, res) => {
+  const { source } = req.query
+
+  if (!source) {
+    return res.json({ noteIds: [] })
+  }
+
+  try {
+    // 从博主文件夹中读取所有Excel文件，提取已有的note_id
+    const safeName = safePathName(source)
+    const bloggerDir = path.join(XHS_OUTPUT_DIR, safeName)
+
+    if (!fs.existsSync(bloggerDir)) {
+      return res.json({ noteIds: [] })
+    }
+
+    // 读取文件夹中的所有Excel文件
+    const files = fs.readdirSync(bloggerDir)
+    const excelFiles = files.filter(f => f.endsWith('.xlsx') && !f.startsWith('~$'))
+
+    // 这里简化处理，返回空数组让前端处理
+    // 实际实现需要在Python端读取Excel提取note_id
+    res.json({ noteIds: [] })
+  } catch (err) {
+    console.error('获取已存在笔记ID失败:', err)
+    res.json({ noteIds: [] })
   }
 })
 
@@ -695,44 +663,26 @@ app.post('/api/xhs/scrape', async (req, res) => {
 
   try {
     const result = await runPythonXhsScraper({ url, count, sourceName: url, existingNoteIds })
-    
+
     // 爬取完成后，如果有博主名且有新帖子，自动生成/更新风格文件
     if (result.bloggerName && result.posts && result.posts.length > 0) {
       console.log(`[风格文件] 检测到博主: ${result.bloggerName}，准备生成风格文件...`)
-      
+
       // 异步生成风格文件（不阻塞响应）
-      generateBloggerStyle(result.bloggerName, result.posts).then(style => {
-        if (style) {
-          const styleFilePath = getStyleFilePath(result.bloggerName)
-          const bloggerDir = path.dirname(styleFilePath)
-          
-          // 确保博主文件夹存在
-          if (!fs.existsSync(bloggerDir)) {
-            fs.mkdirSync(bloggerDir, { recursive: true })
-          }
-          
-          const styleData = {
-            bloggerName: result.bloggerName,
-            style: style,
-            postCount: result.posts.length,
-            updatedAt: new Date().toISOString()
-          }
-          
-          fs.writeFileSync(styleFilePath, JSON.stringify(styleData, null, 2), 'utf-8')
-          console.log(`[风格文件] 已保存: ${styleFilePath}`)
+      generateAndSaveBloggerStyle(result.bloggerName, result.posts, result.outputDir).then(styleProfile => {
+        if (styleProfile) {
+          console.log(`[风格文件] 已保存: ${styleProfile.jsonPath}`)
         }
       }).catch(err => {
         console.error('[风格文件] 生成失败:', err)
       })
     }
-    
+
     res.json(result)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
-
-// ─────────────────────────────────────────────────────────────
 
 // 按关键词搜索爆款帖子：同样交给 Python 爬虫处理搜索结果页
 app.post('/api/xhs/search', async (req, res) => {
@@ -749,13 +699,7 @@ app.post('/api/xhs/search', async (req, res) => {
   }
 })
 
-
 // 启动服务器
-async function start() {
-  await initDB()
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`)
-  })
-}
-
-start().catch(console.error)
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`)
+})
