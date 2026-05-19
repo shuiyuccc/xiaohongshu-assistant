@@ -1043,6 +1043,26 @@ async function generateAndSaveBloggerStyle(bloggerName, posts, outputDir = '') {
   let source = 'ai'
   let style = await generateBloggerStyle(bloggerName, cleanPosts)
 
+  // 校验风格文件中的高频词
+  if (style) {
+    const validation = validateStyleProfile(style, cleanPosts)
+    if (!validation.passed) {
+      console.warn('[风格校验] 发现无效词，将重新生成:', validation.report)
+      // 重新生成一次
+      style = await generateBloggerStyle(bloggerName, cleanPosts)
+      if (style) {
+        const retryValidation = validateStyleProfile(style, cleanPosts)
+        if (!retryValidation.passed) {
+          console.error('[风格校验] 重新生成后仍有无效词:', retryValidation.report)
+        } else {
+          console.log('[风格校验] 重新生成后通过校验')
+        }
+      }
+    } else {
+      console.log('[风格校验] 通过校验')
+    }
+  }
+
   if (!style) {
     source = 'local-fallback'
     style = buildLocalStyleSummary(bloggerName, cleanPosts)
@@ -1350,57 +1370,75 @@ async function generateBloggerStyle(bloggerName, posts) {
 
   const prompt = `你是一名小红书文案风格分析师。请基于下面这位博主的所有标题和正文，提取可用于后续仿写的「风格素材库」。
 
-请深度分析，提取具体可复用的元素，不要泛泛而谈。
-
-## 一、高频词汇库
-从所有标题和正文中提取：
-
-1. **情绪词**（出现2次以上的情绪表达，如：绝了、封神、心动、治愈、太美了、谁懂啊）
-   - 列出至少5个高频情绪词
-
-2. **场景词**（常用的场景/元素描述，如：晨袍、接亲、光影、氛围感、first look）
-   - 列出至少5个高频场景词
-
-3. **钩子词**（用来吸引点击的关键词，如：被问爆、救命、真的、后悔没早点）
-   - 列出至少3个高频钩子词
-
-4. **动作词**（描述拍摄/记录的动词，如：抓拍、定格、记录、捕捉）
-   - 列出至少3个高频动作词
-
-## 二、句式模板库
-提取3-5个博主最爱用的句式结构，用{X}/{Y}/{Z}表示可变部分：
-
-示例格式：
-- 模板1："{情绪词}！{场景}的{元素}真的{形容词}"
-- 模板2："谁懂啊！{动作}的{场景}，{人群}都{反应}了"
-- 模板3："被{人群}问爆的{场景}，{形容词}到{情绪词}"
-
-请根据实际素材提取真实的句式模板。
-
-## 三、语气特征
-
-1. **标点习惯**：
-   - 爱用感叹号还是问号
-   - 省略号的使用频率
-   - 逗号/断句习惯
-
-2. **emoji使用**：
-   - 常用的emoji类型
-   - emoji通常放在什么位置（标题开头/结尾/中间）
-
-3. **口语化特征**：
-   - 常用的语气词（啊啊啊、真的、就是、那种）
-   - 人称使用习惯（我/你/我们）
-   - 句子长短偏好
-
-## 四、仿写规则
-
-1. **灵活使用**：至少使用【句式模板库】或【高频词汇库】或【语气特征】中的一项，根据图片内容自由组合，不强制全部使用
-
-2. **原创表达**：参考博主的语气和句式，但禁止直接复制原标题的完整短语，确保内容原创且贴合图片
+⚠️ 重要原则：
+1. 只提取素材中真实出现的内容，禁止编造
+2. 如果某个类别的词汇在素材里没有出现，写"未出现"，不要用通用词汇填充
+3. 每个词都必须能在素材里找到出处，不要凭空想象
 
 【博主素材】
-${samples}`
+${samples}
+
+---
+
+## 一、标题分析
+
+### 1.1 标题高频词（只从标题中提取，出现2次以上）
+
+- **情绪词**：（如"绝了""封神""心动"等情绪表达）
+  - 格式要求：每个词必须标注"词(出现X次，笔记ID1、ID2...)"
+  - 示例：幸福(出现5次，笔记1、3、7)
+
+- **场景词**：（如"晨袍""接亲""光影"等场景描述）
+  - 格式：词(出现X次，笔记ID1...)
+
+- **钩子词**：（如"被问爆""救命""后悔没早点"等吸引点击的词）
+  - 格式：词(出现X次，笔记ID1...)
+
+- **动作词**：（如"抓拍""定格""记录"等描述动作的词）
+  - 格式：词(出现X次，笔记ID1...)
+
+⚠️ 注意：
+1. 只输出素材里真实出现2次以上的词，没有就写"未出现"
+2. 示例词只有在素材中真实出现过的才能输出
+3. **每个词必须标注笔记ID和出现次数，这是强制要求**
+
+### 1.2 标题句式模板（从真实标题中提取结构）
+格式：原文标题 → 结构分析
+
+请从素材中提取3-5个真实标题，并分析其句式结构。
+
+### 1.3 标题语气特征
+- **标点习惯**：爱用感叹号/问号/句号/未出现
+- **emoji使用**：常用类型、放置位置（开头/中间/结尾/未使用）
+- **语气词**：（列出真实出现的语气词，如无则写"未出现"）
+- **人称使用**：（列出真实使用的人称，如无则写"未出现"）
+
+---
+
+## 二、正文分析
+
+### 2.1 正文高频词（只从正文中提取，出现2次以上）
+
+- **描述词**：（如"温柔""浪漫""自然""高级"等描述词）
+  - 格式：词(出现X次，笔记ID1...)
+
+- **动作词**：（如"抓拍""定格""记录"等描述动作的词）
+  - 格式：词(出现X次，笔记ID1...)
+
+⚠️ 注意：
+1. 只输出素材里真实出现2次以上的词，没有就写"未出现"
+2. 示例词只有在素材中真实出现过的才能输出
+3. **每个词必须标注笔记ID和出现次数，这是强制要求**
+
+### 2.2 正文句式特点
+- 句子长短偏好：（短句为主/长句为主/混合）
+- 常用连接词：（如有关联词则列出，如无则写"未使用"）
+- 段落结构特点：（如：先描述场景再讲感受）
+
+### 2.3 正文语气特征
+- **标点习惯**：逗号使用频率、断句特点
+- **语气词**：列出真实出现的语气词，如无则写"未出现"
+- **人称使用**：列出真实使用的人称，如无则写"未出现"`
 
   try {
     const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
@@ -1425,6 +1463,119 @@ ${samples}`
     console.error('生成风格文件失败:', err)
     return null
   }
+}
+
+// 校验风格文件中的高频词是否真实存在于原素材
+// 返回 { passed: boolean, invalidWords: [], report: string }
+function validateStyleProfile(styleContent, notes) {
+  const invalidWords = []
+  const wordToNotes = new Map() // 词 -> 实际出现的笔记ID集合
+
+  // 1. 统计每个词在原素材中的真实出现情况
+  notes.forEach((note, idx) => {
+    const noteId = note.noteId || `笔记${idx + 1}`
+    const title = note.title || ''
+    const content = note.content || ''
+
+    // 标题中提取的词
+    const titleWords = extractWords(title)
+    titleWords.forEach(w => {
+      if (!wordToNotes.has(w)) wordToNotes.set(w, new Set())
+      wordToNotes.get(w).add(noteId + '(标题)')
+    })
+
+    // 正文中提取的词
+    const contentWords = extractWords(content)
+    contentWords.forEach(w => {
+      if (!wordToNotes.has(w)) wordToNotes.set(w, new Set())
+      wordToNotes.get(w).add(noteId + '(正文)')
+    })
+  })
+
+  // 2. 解析风格文件中的词
+  const parsedWords = parseWordsFromStyle(styleContent)
+
+  // 3. 验证每个词
+  parsedWords.forEach(item => {
+    const { word, claimedCount, claimedNotes, category } = item
+    const actualNotes = wordToNotes.get(word) || new Set()
+    const actualCount = actualNotes.size
+
+    if (actualCount === 0) {
+      invalidWords.push({
+        word,
+        category,
+        claimedCount,
+        claimedNotes,
+        reason: '原素材中未找到该词'
+      })
+    } else if (actualCount < claimedCount) {
+      invalidWords.push({
+        word,
+        category,
+        claimedCount,
+        claimedNotes,
+        actualCount,
+        actualNotes: Array.from(actualNotes),
+        reason: `声称出现${claimedCount}次，但实际在原素材中出现${actualCount}次`
+      })
+    }
+  })
+
+  // 4. 生成报告
+  let report = ''
+  if (invalidWords.length === 0) {
+    report = '校验通过：所有高频词都在原素材中找到对应来源'
+  } else {
+    report = `校验发现问题，共${invalidWords.length}个无效词：\n`
+    invalidWords.forEach((item, idx) => {
+      report += `${idx + 1}. [${item.category}] ${item.word} - ${item.reason}\n`
+    })
+  }
+
+  return {
+    passed: invalidWords.length === 0,
+    invalidWords,
+    report
+  }
+}
+
+// 从文本中提取有意义的词（简单分词）
+function extractWords(text) {
+  if (!text) return []
+  // 匹配连续的中文词、英文单词、或带#的标签
+  const matches = text.match(/[#一-龥a-zA-Z]{2,}/g) || []
+  return matches.map(w => w.replace(/^#+/, ''))
+}
+
+// 从风格文件内容中解析出所有高频词
+function parseWordsFromStyle(styleContent) {
+  const words = []
+
+  // 匹配格式：词(出现X次，笔记ID1、ID2...)
+  // 例如：幸福(出现5次，笔记1、3、7)
+  const wordPattern = /([^（\n]+)\(出现(\d+)次[，,]([^)]+)\)/g
+  let match
+
+  while ((match = wordPattern.exec(styleContent)) !== null) {
+    const word = match[1].trim()
+    const claimedCount = parseInt(match[2])
+    const claimedNotes = match[3].trim()
+
+    // 判断属于哪个分类（情绪/场景/钩子/动作/描述）
+    let category = '未知'
+    const beforeText = styleContent.substring(Math.max(0, match.index - 200), match.index)
+
+    if (beforeText.includes('情绪词')) category = '情绪词'
+    else if (beforeText.includes('场景词')) category = '场景词'
+    else if (beforeText.includes('钩子词')) category = '钩子词'
+    else if (beforeText.includes('动作词')) category = '动作词'
+    else if (beforeText.includes('描述词')) category = '描述词'
+
+    words.push({ word, claimedCount, claimedNotes, category })
+  }
+
+  return words
 }
 
 // 检查登录态
