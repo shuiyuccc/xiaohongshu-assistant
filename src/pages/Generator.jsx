@@ -240,7 +240,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
         title: matched.title || `标题 ${index + 1}`,
         content: matched.content || '',
         coverReason: matched.coverReason || profile.selectedReason || '',
-        reason: matched.reason || '基于当前封面描述和参考博主风格生成',
+        reason: matched.reason || '写作参考来源：基于当前封面描述和参考博主风格生成',
         index
       }
     })
@@ -310,8 +310,22 @@ export default function Generator({ userId, username, library, onDataChange }) {
           const styleData = await getBloggerStyle(influencerName)
           
           if (styleData.exists && styleData.style) {
-            bloggerStyleProfile = styleData.style
-            setLoadingStatus('已找到博主风格文件，正在生成...')
+            const needsStyleUpgrade = !styleData.style.includes('标题槽位词库')
+            if (needsStyleUpgrade) {
+              setLoadingStatus('检测到旧版博主风格文件，正在重新提炼写作规则...')
+              try {
+                const generatedStyle = await generateBloggerStyleFile(influencerName)
+                bloggerStyleProfile = generatedStyle.styleProfile?.style || styleData.style
+                setLoadingStatus('新版风格文件已保存，正在生成内容...')
+              } catch (e) {
+                console.error('升级博主风格文件失败，继续使用旧版风格文件:', e)
+                bloggerStyleProfile = styleData.style
+                setLoadingStatus('已找到博主风格文件，正在生成...')
+              }
+            } else {
+              bloggerStyleProfile = styleData.style
+              setLoadingStatus('已找到博主风格文件，正在生成...')
+            }
           } else {
             // 生成风格文件
             setLoadingStatus('首次分析该博主，正在生成风格文件...')
@@ -551,7 +565,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
             coverIndex: normalizeCoverIndex(item.coverIndex, i + 1),
             angle: item.angle || '模仿风格',
             coverReason: item.coverReason || '',
-            reason: item.reason || '综合评估',
+            reason: item.reason || '写作参考来源：模型未返回具体来源，使用参考素材与当前主题综合生成',
             index: i
           }))
         }
@@ -668,7 +682,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
   const getReasonFromText = (text, index) => {
     const reasonMatch = text.match(/理由[：:]\s*([^\n]+)/i)
     if (reasonMatch) return reasonMatch[1].trim()
-    return '综合评估流量潜力'
+    return '写作参考来源：模型未返回具体来源，按参考素材和当前主题综合生成'
   }
 
   const parseSection = (section, index) => {
@@ -688,7 +702,7 @@ export default function Generator({ userId, username, library, onDataChange }) {
     if (angleMatch) angle = angleMatch[1].trim()
 
     // 提取理由
-    let reason = '综合评估'
+    let reason = '写作参考来源：模型未返回具体来源，按参考素材和当前主题综合生成'
     const reasonMatch = section.match(/理由[：:]\s*([^\n]+)/i) || section.match(/原因[：:]\s*([^\n]+)/i)
     if (reasonMatch) reason = reasonMatch[1].trim()
 

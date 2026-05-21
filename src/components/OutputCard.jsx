@@ -76,6 +76,33 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
   const coverImage = images?.find(img => String(img.id) === String(item.imageId))
     || (images && item.coverIndex && item.coverIndex <= images.length ? images[item.coverIndex - 1] : null)
 
+  const parseReferenceReason = (reason) => {
+    const text = String(reason || '').trim()
+    if (!text) return { titleSource: '', contentSource: '' }
+
+    const titlePattern = /(?:【\s*标题来源\s*】|标题来源[：:])/
+    const contentPattern = /(?:【\s*正文来源\s*】|正文来源[：:])/
+    const titleMatch = text.match(titlePattern)
+    const contentMatch = text.match(contentPattern)
+
+    if (!titleMatch && !contentMatch) {
+      return { titleSource: text, contentSource: '' }
+    }
+
+    const titleStart = titleMatch ? titleMatch.index + titleMatch[0].length : 0
+    const contentStart = contentMatch ? contentMatch.index + contentMatch[0].length : text.length
+    const titleSource = titleMatch
+      ? text.slice(titleStart, contentMatch ? contentMatch.index : text.length).trim()
+      : ''
+    const contentSource = contentMatch
+      ? text.slice(contentStart).trim()
+      : ''
+
+    return { titleSource, contentSource }
+  }
+
+  const referenceReason = parseReferenceReason(item.reason)
+
   return (
     <div className="bg-white rounded-lg border border-gray-100 overflow-hidden shadow-sm">
       <div className="space-y-2">
@@ -193,19 +220,22 @@ export default function OutputCard({ item, index, images, onRefreshTitle, onRefr
                 </p>
               )}
 
-              {/* 选择封面的理由 */}
-              {item.coverReason && (
-                <div className="bg-gray-50 rounded-md p-3">
-                  <p className="text-xs text-gray-500 font-medium mb-1">选封面理由：</p>
-                  <p className="text-xs text-gray-600">{item.coverReason}</p>
-                </div>
-              )}
-
-              {/* 爆款分析 */}
+              {/* 写作参考来源 */}
               {item.reason && (
                 <div className="bg-rose-50 rounded-md p-3">
-                  <p className="text-xs text-rose-600 font-medium mb-1">爆款分析：</p>
-                  <p className="text-xs text-gray-600">{item.reason}</p>
+                  <p className="text-xs text-rose-600 font-medium mb-1">写作参考来源：</p>
+                  {referenceReason.titleSource && (
+                    <div className="mb-2">
+                      <p className="text-xs font-bold text-rose-600 mb-1">标题来源：</p>
+                      <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">{referenceReason.titleSource}</p>
+                    </div>
+                  )}
+                  {referenceReason.contentSource && (
+                    <div>
+                      <p className="text-xs font-bold text-rose-600 mb-1">正文来源：</p>
+                      <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">{referenceReason.contentSource}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
